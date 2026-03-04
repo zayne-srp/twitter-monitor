@@ -128,3 +128,81 @@ class TestGetRecentTweets:
     def test_get_recent_empty(self, db):
         recent = db.get_recent_tweets(hours=24)
         assert recent == []
+
+
+class TestGetAllTweetIds:
+    def test_returns_all_ids(self, db):
+        session_id = db.create_session()
+        db.save_tweets(
+            [_make_tweet("10"), _make_tweet("20"), _make_tweet("30")],
+            session_id,
+        )
+        ids = db.get_all_tweet_ids()
+        assert ids == {"10", "20", "30"}
+
+    def test_returns_empty_set(self, db):
+        ids = db.get_all_tweet_ids()
+        assert ids == set()
+
+
+class TestGetExistingIds:
+    def test_returns_matching_ids(self, db):
+        session_id = db.create_session()
+        db.save_tweets([_make_tweet("10"), _make_tweet("20")], session_id)
+        existing = db.get_existing_ids(["10", "20", "99"])
+        assert existing == {"10", "20"}
+
+    def test_returns_empty_for_no_match(self, db):
+        session_id = db.create_session()
+        db.save_tweets([_make_tweet("10")], session_id)
+        existing = db.get_existing_ids(["99", "100"])
+        assert existing == set()
+
+    def test_returns_empty_for_empty_input(self, db):
+        existing = db.get_existing_ids([])
+        assert existing == set()
+
+
+class TestGetLastCrawlStart:
+    def test_returns_earliest_timestamp_from_last_session(self, db):
+        session_id = db.create_session()
+        db.save_tweets(
+            [
+                {**_make_tweet("1"), "timestamp": "2026-03-04T10:00:00Z"},
+                {**_make_tweet("2"), "timestamp": "2026-03-04T08:00:00Z"},
+                {**_make_tweet("3"), "timestamp": "2026-03-04T12:00:00Z"},
+            ],
+            session_id,
+        )
+        db.complete_session(session_id, total_tweets=3, ai_tweets_count=0)
+        result = db.get_last_crawl_start()
+        assert result == "2026-03-04T08:00:00Z"
+
+    def test_returns_none_when_no_sessions(self, db):
+        result = db.get_last_crawl_start()
+        assert result is None
+
+    def test_ignores_incomplete_sessions(self, db):
+        # Create a session but don't complete it
+        session_id = db.create_session()
+        db.save_tweets([_make_tweet("1")], session_id)
+        result = db.get_last_crawl_start()
+        assert result is None
+
+    def test_returns_from_latest_completed_session(self, db):
+        # First session (completed)
+        s1 = db.create_session()
+        db.save_tweets(
+            [{**_make_tweet("1"), "timestamp": "2026-03-03T08:00:00Z"}], s1,
+        )
+        db.complete_session(s1, total_tweets=1, ai_tweets_count=0)
+
+        # Second session (completed, more recent)
+        s2 = db.create_session()
+        db.save_tweets(
+            [{**_make_tweet("2"), "timestamp": "2026-03-04T09:00:00Z"}], s2,
+        )
+        db.complete_session(s2, total_tweets=1, ai_tweets_count=0)
+
+        result = db.get_last_crawl_start()
+        assert result == "2026-03-04T09:00:00Z"
