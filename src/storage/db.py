@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List
 
-from src.crawler.twitter_crawler import Tweet
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS crawl_sessions (
     ai_tweets_count INTEGER DEFAULT 0
 )
 """
+
+
+
+def _get(obj, key, default=None):
+    """Get field from either a dict or a dataclass."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
 
 
 class TweetDatabase:
@@ -65,7 +73,7 @@ class TweetDatabase:
                     f"ALTER TABLE tweets ADD COLUMN {col_name} {col_def}"
                 )
 
-    def save_tweet(self, tweet: Tweet, session_id: str) -> bool:
+    def save_tweet(self, tweet: Dict[str, Any], session_id: str) -> bool:
         conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.execute(
@@ -74,9 +82,9 @@ class TweetDatabase:
                 "feed_type, crawl_session_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    tweet.id, tweet.text, tweet.author, tweet.url,
-                    tweet.timestamp, tweet.likes, tweet.retweets,
-                    tweet.feed_type, session_id,
+                    _get(tweet,"id"), _get(tweet,"text"), _get(tweet,"author"), _get(tweet,"url"),
+                    _get(tweet,"timestamp",""), _get(tweet,"likes",0),
+                    _get(tweet,"retweets",0), _get(tweet,"feed_type"), session_id,
                 ),
             )
             conn.commit()
@@ -84,7 +92,7 @@ class TweetDatabase:
         finally:
             conn.close()
 
-    def save_tweets(self, tweets: List[Tweet], session_id: str) -> int:
+    def save_tweets(self, tweets: List[Dict[str, Any]], session_id: str) -> int:
         saved = 0
         for tweet in tweets:
             if self.save_tweet(tweet, session_id):
