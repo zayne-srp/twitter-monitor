@@ -60,8 +60,11 @@ class ReportGenerator:
             lines.append("No AI-related tweets found in this session.")
             return "\n".join(lines)
 
+        display_tweets = tweets[:20]
+        omitted = len(tweets) - 20 if len(tweets) > 20 else 0
+
         categorized: dict[str, list[Dict[str, Any]]] = defaultdict(list)
-        for tweet in tweets:
+        for tweet in display_tweets:
             category = self.categorize_tweet(tweet)
             categorized[category].append(tweet)
 
@@ -87,11 +90,17 @@ class ReportGenerator:
                 )
             lines.append("")
 
+        if omitted > 0:
+            lines.append(f"（还有 {omitted} 条，已省略）")
+
         return "\n".join(lines)
 
     def send_report(self, content: str) -> bool:
         """Send report via Feishu webhook or print to stdout. Returns True if webhook sent."""
         webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
+        MAX_CHARS = 3800
+        if webhook_url and len(content) > MAX_CHARS:
+            content = content[:MAX_CHARS] + "...（内容过长已截断）"
         if webhook_url:
             resp = requests.post(
                 webhook_url,

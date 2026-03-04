@@ -84,6 +84,7 @@ class TestGetFeeds:
         eval_result = self._make_eval_result(3)
         mock_cmd.side_effect = [
             "ok",           # navigate
+            "5",            # login check: tweet count
             eval_result,    # eval (3 tweets → limit reached)
         ]
         crawler = TwitterCrawler()
@@ -100,6 +101,7 @@ class TestGetFeeds:
         eval_result = self._make_eval_result(2)
         mock_cmd.side_effect = [
             "ok",           # navigate
+            "5",            # login check: tweet count
             eval_result,    # eval (2 tweets → limit reached)
         ]
         crawler = TwitterCrawler()
@@ -113,6 +115,7 @@ class TestGetFeeds:
         """Empty eval results trigger no_new_content stop after 3 consecutive rounds."""
         mock_cmd.side_effect = [
             "ok",       # navigate
+            "5",        # login check: tweet count
             "[]",       # eval round 1 (no new → consecutive=1)
             "true",     # scroll
             "[]",       # eval round 2 (no new → consecutive=2)
@@ -135,7 +138,7 @@ class TestGetFeeds:
     def test_get_feed_respects_limit(self, mock_cmd, mock_sleep):
         """5 tweets returned but limit=2 → returns only 2."""
         eval_result = self._make_eval_result(5)
-        mock_cmd.side_effect = ["ok", eval_result]
+        mock_cmd.side_effect = ["ok", "5", eval_result]
         crawler = TwitterCrawler()
         tweets = crawler.get_for_you_feed(limit=2)
         assert len(tweets) == 2
@@ -148,6 +151,7 @@ class TestGetFeeds:
         page2 = self._make_eval_result(2, start_id=200)
         mock_cmd.side_effect = [
             "ok",       # navigate
+            "5",        # login check: tweet count
             page1,      # eval page 1 (2 tweets, limit=4 not reached)
             "true",     # scroll
             page2,      # eval page 2 (2 more tweets, total=4 → limit reached)
@@ -163,7 +167,7 @@ class TestGetFeeds:
     def test_max_tweets_stop(self, mock_cmd, mock_sleep):
         """Stops when max_tweets is reached."""
         eval_result = self._make_eval_result(5)
-        mock_cmd.side_effect = ["ok", eval_result]
+        mock_cmd.side_effect = ["ok", "5", eval_result]
         crawler = TwitterCrawler()
         tweets = crawler.get_for_you_feed(limit=50, max_tweets=3)
         assert len(tweets) == 3
@@ -187,7 +191,7 @@ class TestGetFeeds:
                 "url": f"https://x.com/user_{i}/status/{100 + i}",
             })
         eval_result = json.dumps(tweets_data)
-        mock_cmd.side_effect = ["ok", eval_result]
+        mock_cmd.side_effect = ["ok", "5", eval_result]
         crawler = TwitterCrawler()
         tweets = crawler.get_for_you_feed(limit=50, db=mock_db)
         # Should stop at 10 tweets due to duplicate_window (10/10 >= 8)
@@ -216,7 +220,7 @@ class TestGetFeeds:
             },
         ]
         eval_result = json.dumps(tweets_data)
-        mock_cmd.side_effect = ["ok", eval_result]
+        mock_cmd.side_effect = ["ok", "5", eval_result]
         crawler = TwitterCrawler()
         tweets = crawler.get_for_you_feed(limit=50, db=mock_db)
         # Stops at tweet 2 due to timestamp, both tweets are collected
