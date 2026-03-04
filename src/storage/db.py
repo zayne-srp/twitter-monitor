@@ -46,9 +46,24 @@ class TweetDatabase:
         try:
             conn.execute(_CREATE_TWEETS_TABLE)
             conn.execute(_CREATE_SESSIONS_TABLE)
+            self._migrate_columns(conn)
             conn.commit()
         finally:
             conn.close()
+
+    def _migrate_columns(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("PRAGMA table_info(tweets)")
+        existing = {row[1] for row in cursor.fetchall()}
+        migrations = [
+            ("is_ai_related", "INTEGER DEFAULT 0"),
+            ("sent", "INTEGER DEFAULT 0"),
+            ("sent_at", "TEXT"),
+        ]
+        for col_name, col_def in migrations:
+            if col_name not in existing:
+                conn.execute(
+                    f"ALTER TABLE tweets ADD COLUMN {col_name} {col_def}"
+                )
 
     def save_tweet(self, tweet: Tweet, session_id: str) -> bool:
         conn = sqlite3.connect(self.db_path)
@@ -129,5 +144,54 @@ class TweetDatabase:
                 (f"-{hours}",),
             )
             return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def mark_ai_related(self, tweet_ids: List[str]) -> int:
+        """Mark tweets as AI-related. Returns count updated."""
+        if not tweet_ids:
+            return 0
+        conn = sqlite3.connect(self.db_path)
+        try:
+            placeholders = ",".join("?" for _ in tweet_ids)
+            cursor = conn.execute(
+                f"UPDATE tweets SET is_ai_related = 1 "
+                f"WHERE id IN ({placeholders})",
+                tweet_ids,
+            )
+            conn.commit()
+            return cursor.rowcount
+        finally:
+            conn.close()
+
+    def get_unsent_ai_tweets(self) -> List[dict]:
+        """Return tweets where is_ai_related=1 AND sent=0."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM tweets "
+                "WHERE is_ai_related = 1 AND sent = 0 "
+                "ORDER BY id",
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def mark_sent(self, tweet_ids: List[str]) -> int:
+        """Mark tweets as sent (sent=1, sent_at=now()). Returns count updated."""
+        if not tweet_ids:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            placeholders = ",".join("?" for _ in tweet_ids)
+            cursor = conn.execute(
+                f"UPDATE tweets SET sent = 1, sent_at = ? "
+                f"WHERE id IN ({placeholders})",
+                [now, *tweet_ids],
+            )
+            conn.commit()
+            return cursor.rowcount
         finally:
             conn.close()
