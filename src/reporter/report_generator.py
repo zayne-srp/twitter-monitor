@@ -6,7 +6,7 @@ from typing import List
 
 import requests
 
-from src.crawler.twitter_crawler import Tweet
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -32,15 +32,20 @@ _CATEGORY_KEYWORDS = {
 }
 
 
+
+def _get(obj, key, default=''):
+    return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+
 class ReportGenerator:
-    def categorize_tweet(self, tweet: Tweet) -> str:
-        text_lower = tweet.text.lower()
+    def categorize_tweet(self, tweet: Dict[str, Any]) -> str:
+        text_lower = (tweet.get("text", "") if isinstance(tweet, dict) else getattr(tweet, "text", "")).lower()
         for category, keywords in _CATEGORY_KEYWORDS.items():
             if any(kw.lower() in text_lower for kw in keywords):
                 return category
         return "Opinion & Discussion"
 
-    def generate_report(self, tweets: List[Tweet], session_id: str) -> str:
+    def generate_report(self, tweets: List[Dict[str, Any]], session_id: str) -> str:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         lines = [
             f"# Twitter AI Monitor Report",
@@ -55,7 +60,7 @@ class ReportGenerator:
             lines.append("No AI-related tweets found in this session.")
             return "\n".join(lines)
 
-        categorized: dict[str, list[Tweet]] = defaultdict(list)
+        categorized: dict[str, list[Dict[str, Any]]] = defaultdict(list)
         for tweet in tweets:
             category = self.categorize_tweet(tweet)
             categorized[category].append(tweet)
@@ -76,9 +81,9 @@ class ReportGenerator:
             lines.append("")
             for tweet in cat_tweets:
                 lines.append(
-                    f"- **@{tweet.author}**: {tweet.text} "
-                    f"[link]({tweet.url}) "
-                    f"| ❤ {tweet.likes} 🔁 {tweet.retweets}"
+                    f"- **@{_get(tweet,'author')}**: {_get(tweet,'text')} "
+                    f"[link]({_get(tweet,'url')}) "
+                    f"| ❤ {_get(tweet,'likes',0)} 🔁 {_get(tweet,'retweets',0)}"
                 )
             lines.append("")
 

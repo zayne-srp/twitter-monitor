@@ -31,6 +31,9 @@ logs/*.log
 # Reports (generated)
 reports/*.md
 
+# Worktrees
+.worktrees/
+
 # OS
 .DS_Store
 Thumbs.db

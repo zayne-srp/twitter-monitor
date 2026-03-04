@@ -2,7 +2,6 @@ import sqlite3
 
 import pytest
 
-from src.crawler.twitter_crawler import Tweet
 from src.storage.db import TweetDatabase
 
 
@@ -12,17 +11,17 @@ def db(tmp_path):
     return TweetDatabase(db_path)
 
 
-def _make_tweet(tweet_id: str = "1", text: str = "AI test tweet") -> Tweet:
-    return Tweet(
-        id=tweet_id,
-        text=text,
-        author="testuser",
-        url=f"https://twitter.com/testuser/status/{tweet_id}",
-        timestamp="2026-03-04T10:00:00Z",
-        likes=5,
-        retweets=2,
-        feed_type="for_you",
-    )
+def _make_tweet(tweet_id="1", text="AI test tweet"):
+    return {
+        "id": tweet_id,
+        "text": text,
+        "author": "testuser",
+        "url": f"https://twitter.com/testuser/status/{tweet_id}",
+        "timestamp": "2026-03-04T10:00:00Z",
+        "likes": 5,
+        "retweets": 2,
+        "feed_type": "for_you",
+    }
 
 
 class TestDatabaseInit:

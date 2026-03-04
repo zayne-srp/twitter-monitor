@@ -4,33 +4,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from src.crawler.twitter_crawler import Tweet, TwitterCrawler
-
-
-class TestTweetDataclass:
-    def test_tweet_creation(self):
-        tweet = Tweet(
-            id="123456",
-            text="Testing AI models",
-            author="testuser",
-            url="https://twitter.com/testuser/status/123456",
-            timestamp="2026-03-04T10:00:00Z",
-            likes=42,
-            retweets=10,
-            feed_type="for_you",
-        )
-        assert tweet.id == "123456"
-        assert tweet.text == "Testing AI models"
-        assert tweet.author == "testuser"
-        assert tweet.feed_type == "for_you"
-
-    def test_tweet_is_frozen(self):
-        tweet = Tweet(
-            id="1", text="t", author="a", url="u",
-            timestamp="ts", likes=0, retweets=0, feed_type="for_you",
-        )
-        with pytest.raises(AttributeError):
-            tweet.text = "modified"
+from src.crawler.twitter_crawler import TwitterCrawler
 
 
 class TestTwitterCrawlerInit:
@@ -59,10 +33,10 @@ class TestRunBrowserCommand:
             text=True,
             timeout=30,
         )
-        assert result == {"result": "ok"}
+        assert result == '{"result": "ok"}'
 
     @patch("subprocess.run")
-    def test_non_json_output(self, mock_run):
+    def test_returns_raw_stdout(self, mock_run):
         mock_run.return_value = MagicMock(
             stdout="plain text output",
             stderr="",
@@ -70,7 +44,7 @@ class TestRunBrowserCommand:
         )
         crawler = TwitterCrawler()
         result = crawler._run_browser_command("snapshot")
-        assert result == {"raw_output": "plain text output"}
+        assert result == "plain text output"
 
     @patch("subprocess.run")
     def test_command_timeout(self, mock_run):
@@ -92,50 +66,51 @@ class TestRunBrowserCommand:
 
 
 class TestGetFeeds:
-    def _make_snapshot_with_tweets(self, count=3, feed_type="for_you"):
+    def _make_eval_result(self, count=3):
         tweets = []
         for i in range(count):
             tweets.append({
-                "type": "tweet",
-                "id": f"tweet_{i}",
                 "text": f"AI tweet number {i} about GPT",
                 "author": f"user_{i}",
-                "url": f"https://twitter.com/user_{i}/status/tweet_{i}",
-                "timestamp": f"2026-03-04T{10+i:02d}:00:00Z",
-                "likes": i * 10,
-                "retweets": i * 5,
+                "time": f"2026-03-04T{10 + i:02d}:00:00Z",
+                "url": f"https://x.com/user_{i}/status/{100 + i}",
             })
-        return {"tweets": tweets}
+        return json.dumps(tweets)
 
+    @patch("time.sleep")
     @patch.object(TwitterCrawler, "_run_browser_command")
-    def test_get_for_you_feed(self, mock_cmd):
-        snapshot = self._make_snapshot_with_tweets(3, "for_you")
+    def test_get_for_you_feed(self, mock_cmd, mock_sleep):
+        eval_result = self._make_eval_result(3)
         mock_cmd.side_effect = [
-            {"result": "ok"},   # navigate
-            snapshot,           # snapshot
+            "ok",           # navigate
+            eval_result,    # eval
         ]
         crawler = TwitterCrawler()
         tweets = crawler.get_for_you_feed(limit=50)
         assert len(tweets) == 3
-        assert all(t.feed_type == "for_you" for t in tweets)
+        assert all(t["feed_type"] == "for_you" for t in tweets)
+        assert tweets[0]["id"] == "100"
+        assert tweets[0]["author"] == "user_0"
 
+    @patch("time.sleep")
     @patch.object(TwitterCrawler, "_run_browser_command")
-    def test_get_following_feed(self, mock_cmd):
-        snapshot = self._make_snapshot_with_tweets(2, "following")
+    def test_get_following_feed(self, mock_cmd, mock_sleep):
+        eval_result = self._make_eval_result(2)
         mock_cmd.side_effect = [
-            {"result": "ok"},   # navigate
-            snapshot,           # snapshot
+            "ok",           # navigate
+            eval_result,    # eval
         ]
         crawler = TwitterCrawler()
         tweets = crawler.get_following_feed(limit=50)
         assert len(tweets) == 2
-        assert all(t.feed_type == "following" for t in tweets)
+        assert all(t["feed_type"] == "following" for t in tweets)
 
+    @patch("time.sleep")
     @patch.object(TwitterCrawler, "_run_browser_command")
-    def test_get_feed_empty(self, mock_cmd):
+    def test_get_feed_empty(self, mock_cmd, mock_sleep):
         mock_cmd.side_effect = [
-            {"result": "ok"},    # navigate
-            {"tweets": []},      # empty snapshot
+            "ok",       # navigate
+            "[]",       # eval returns empty array
         ]
         crawler = TwitterCrawler()
         tweets = crawler.get_for_you_feed(limit=50)
@@ -148,56 +123,86 @@ class TestGetFeeds:
         tweets = crawler.get_for_you_feed(limit=50)
         assert tweets == []
 
-
-class TestParseTweets:
-    def test_parse_valid_tweets(self):
-        snapshot = {
-            "tweets": [
-                {
-                    "id": "111",
-                    "text": "Hello AI world",
-                    "author": "alice",
-                    "url": "https://twitter.com/alice/status/111",
-                    "timestamp": "2026-03-04T10:00:00Z",
-                    "likes": 5,
-                    "retweets": 2,
-                },
-            ]
-        }
+    @patch("time.sleep")
+    @patch.object(TwitterCrawler, "_run_browser_command")
+    def test_get_feed_respects_limit(self, mock_cmd, mock_sleep):
+        eval_result = self._make_eval_result(5)
+        mock_cmd.side_effect = ["ok", eval_result]
         crawler = TwitterCrawler()
-        tweets = crawler._parse_tweets_from_snapshot(snapshot, "for_you")
+        tweets = crawler.get_for_you_feed(limit=2)
+        assert len(tweets) == 2
+
+
+class TestParseTweetsFromEval:
+    def test_parse_valid_eval_result(self):
+        data = [
+            {
+                "text": "Hello AI world",
+                "author": "alice",
+                "time": "2026-03-04T10:00:00Z",
+                "url": "https://x.com/alice/status/111",
+            },
+        ]
+        crawler = TwitterCrawler()
+        tweets = crawler._parse_tweets_from_eval(json.dumps(data), "for_you")
         assert len(tweets) == 1
-        assert tweets[0].id == "111"
-        assert tweets[0].feed_type == "for_you"
+        assert tweets[0]["id"] == "111"
+        assert tweets[0]["text"] == "Hello AI world"
+        assert tweets[0]["author"] == "alice"
+        assert tweets[0]["feed_type"] == "for_you"
+        assert tweets[0]["likes"] == 0
+        assert tweets[0]["retweets"] == 0
 
-    def test_parse_missing_fields_uses_defaults(self):
-        snapshot = {
-            "tweets": [
-                {
-                    "id": "222",
-                    "text": "Partial tweet",
-                },
-            ]
-        }
+    def test_parse_double_encoded_json(self):
+        data = [
+            {
+                "text": "Double encoded tweet",
+                "author": "bob",
+                "time": "2026-03-04T10:00:00Z",
+                "url": "https://x.com/bob/status/222",
+            },
+        ]
+        # Double-encode: JSON string within a JSON string
+        double_encoded = json.dumps(json.dumps(data))
         crawler = TwitterCrawler()
-        tweets = crawler._parse_tweets_from_snapshot(snapshot, "following")
+        tweets = crawler._parse_tweets_from_eval(double_encoded, "following")
         assert len(tweets) == 1
-        assert tweets[0].author == "unknown"
-        assert tweets[0].likes == 0
+        assert tweets[0]["id"] == "222"
 
-    def test_parse_empty_snapshot(self):
+    def test_parse_skips_empty_url(self):
+        data = [
+            {"text": "No URL tweet", "author": "a", "time": "", "url": ""},
+            {"text": "Valid", "author": "b", "time": "", "url": "https://x.com/b/status/333"},
+        ]
         crawler = TwitterCrawler()
-        tweets = crawler._parse_tweets_from_snapshot({}, "for_you")
+        tweets = crawler._parse_tweets_from_eval(json.dumps(data), "for_you")
+        assert len(tweets) == 1
+        assert tweets[0]["id"] == "333"
+
+    def test_parse_skips_empty_text(self):
+        data = [
+            {"text": "", "author": "a", "time": "", "url": "https://x.com/a/status/444"},
+            {"text": "Has text", "author": "b", "time": "", "url": "https://x.com/b/status/555"},
+        ]
+        crawler = TwitterCrawler()
+        tweets = crawler._parse_tweets_from_eval(json.dumps(data), "for_you")
+        assert len(tweets) == 1
+        assert tweets[0]["id"] == "555"
+
+    def test_parse_empty_array(self):
+        crawler = TwitterCrawler()
+        tweets = crawler._parse_tweets_from_eval("[]", "for_you")
         assert tweets == []
 
-    def test_parse_skips_tweets_without_id(self):
-        snapshot = {
-            "tweets": [
-                {"text": "No ID tweet"},
-                {"id": "valid", "text": "Valid tweet"},
-            ]
-        }
+    def test_parse_extracts_id_from_url(self):
+        data = [
+            {
+                "text": "Test",
+                "author": "user",
+                "time": "",
+                "url": "https://x.com/user/status/987654321",
+            },
+        ]
         crawler = TwitterCrawler()
-        tweets = crawler._parse_tweets_from_snapshot(snapshot, "for_you")
-        assert len(tweets) == 1
-        assert tweets[0].id == "valid"
+        tweets = crawler._parse_tweets_from_eval(json.dumps(data), "for_you")
+        assert tweets[0]["id"] == "987654321"

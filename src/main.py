@@ -60,7 +60,7 @@ def run_crawl(limit: int) -> str:
     ai_tweets = ai_filter.filter_tweets(all_tweets)
     logger.info("Filtered to %d AI-related tweets", len(ai_tweets))
 
-    ai_ids = [t.id for t in ai_tweets]
+    ai_ids = [t["id"] for t in ai_tweets]
     db.mark_ai_related(ai_ids)
 
     db.complete_session(
@@ -84,19 +84,7 @@ def run_send(output_dir: str) -> str | None:
         logger.info("No unsent AI tweets to report")
         return None
 
-    from src.crawler.twitter_crawler import Tweet
-
-    tweets = [
-        Tweet(
-            id=r["id"], text=r["text"], author=r["author"],
-            url=r["url"], timestamp=r["timestamp"],
-            likes=r["likes"], retweets=r["retweets"],
-            feed_type=r["feed_type"],
-        )
-        for r in rows
-    ]
-
-    report_content = reporter.generate_report(tweets, "send")
+    report_content = reporter.generate_report(rows, "send")
     filepath = reporter.save_report(report_content, output_dir)
     logger.info("Report saved: %s", filepath)
 
