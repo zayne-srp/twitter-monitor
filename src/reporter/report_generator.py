@@ -4,6 +4,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import List
 
+import requests
+
 from src.crawler.twitter_crawler import Tweet
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,20 @@ class ReportGenerator:
             lines.append("")
 
         return "\n".join(lines)
+
+    def send_report(self, content: str) -> bool:
+        """Send report via Feishu webhook or print to stdout. Returns True if webhook sent."""
+        webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
+        if webhook_url:
+            resp = requests.post(
+                webhook_url,
+                json={"msg_type": "text", "content": {"text": content}},
+            )
+            resp.raise_for_status()
+            return True
+        else:
+            print(content)
+            return False
 
     def save_report(self, content: str, output_dir: str) -> str:
         os.makedirs(output_dir, exist_ok=True)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import logging
 import os
@@ -32,27 +34,17 @@ def setup_logging() -> None:
     )
 
 
-def run_crawl(limit: int) -> tuple[list, str]:
+def run_crawl(limit: int) -> str:
     logger = logging.getLogger(__name__)
 
-    username = os.getenv("TWITTER_USERNAME")
-    password = os.getenv("TWITTER_PASSWORD")
     cdp_port = int(os.getenv("CDP_PORT", "18800"))
     db_path = os.getenv("DB_PATH", "data/tweets.db")
-
-    if not username or not password:
-        logger.error("TWITTER_USERNAME and TWITTER_PASSWORD must be set in .env")
-        sys.exit(1)
 
     crawler = TwitterCrawler(cdp_port=cdp_port)
     ai_filter = AIFilter()
     db = TweetDatabase(db_path)
 
     logger.info("Starting crawl (limit=%d per feed)", limit)
-
-    if not crawler.login(username, password):
-        logger.error("Login failed, aborting crawl")
-        sys.exit(1)
 
     session_id = db.create_session()
 
@@ -62,11 +54,14 @@ def run_crawl(limit: int) -> tuple[list, str]:
 
     logger.info("Crawled %d total tweets", len(all_tweets))
 
+    saved_count = db.save_tweets(all_tweets, session_id)
+    logger.info("Saved %d new tweets (deduped)", saved_count)
+
     ai_tweets = ai_filter.filter_tweets(all_tweets)
     logger.info("Filtered to %d AI-related tweets", len(ai_tweets))
 
-    saved_count = db.save_tweets(ai_tweets, session_id)
-    logger.info("Saved %d new tweets (deduped)", saved_count)
+    ai_ids = [t.id for t in ai_tweets]
+    db.mark_ai_related(ai_ids)
 
     db.complete_session(
         session_id,
@@ -74,32 +69,47 @@ def run_crawl(limit: int) -> tuple[list, str]:
         ai_tweets_count=len(ai_tweets),
     )
 
-    return ai_tweets, session_id
+    return session_id
 
 
-def run_report(output_dir: str, tweets: list | None = None, session_id: str = "") -> str:
+def run_send(output_dir: str) -> str | None:
     logger = logging.getLogger(__name__)
+
+    db_path = os.getenv("DB_PATH", "data/tweets.db")
+    db = TweetDatabase(db_path)
     reporter = ReportGenerator()
 
-    if tweets is None:
-        db_path = os.getenv("DB_PATH", "data/tweets.db")
-        db = TweetDatabase(db_path)
-        rows = db.get_recent_tweets(hours=24)
-        from src.crawler.twitter_crawler import Tweet
-        tweets = [
-            Tweet(
-                id=r["id"], text=r["text"], author=r["author"],
-                url=r["url"], timestamp=r["timestamp"],
-                likes=r["likes"], retweets=r["retweets"],
-                feed_type=r["feed_type"],
-            )
-            for r in rows
-        ]
-        session_id = session_id or "report-only"
+    rows = db.get_unsent_ai_tweets()
+    if not rows:
+        logger.info("No unsent AI tweets to report")
+        return None
 
-    report_content = reporter.generate_report(tweets, session_id)
+    from src.crawler.twitter_crawler import Tweet
+
+    tweets = [
+        Tweet(
+            id=r["id"], text=r["text"], author=r["author"],
+            url=r["url"], timestamp=r["timestamp"],
+            likes=r["likes"], retweets=r["retweets"],
+            feed_type=r["feed_type"],
+        )
+        for r in rows
+    ]
+
+    report_content = reporter.generate_report(tweets, "send")
     filepath = reporter.save_report(report_content, output_dir)
-    logger.info("Report generated: %s", filepath)
+    logger.info("Report saved: %s", filepath)
+
+    sent_via_webhook = reporter.send_report(report_content)
+    if sent_via_webhook:
+        logger.info("Report sent via Feishu webhook")
+    else:
+        logger.info("Report printed to stdout (no webhook configured)")
+
+    tweet_ids = [r["id"] for r in rows]
+    db.mark_sent(tweet_ids)
+    logger.info("Marked %d tweets as sent", len(tweet_ids))
+
     return filepath
 
 
@@ -128,15 +138,14 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     logger.info("Twitter AI Monitor started (mode=%s)", args.mode)
 
-    tweets = None
-    session_id = ""
-
     if args.mode in ("crawl", "all"):
-        tweets, session_id = run_crawl(args.limit)
+        session_id = run_crawl(args.limit)
+        logger.info("Crawl complete (session=%s)", session_id)
 
     if args.mode in ("report", "all"):
-        filepath = run_report(args.output_dir, tweets, session_id)
-        logger.info("Done. Report at: %s", filepath)
+        filepath = run_send(args.output_dir)
+        if filepath:
+            logger.info("Done. Report at: %s", filepath)
 
     logger.info("Twitter AI Monitor finished")
 
