@@ -46,41 +46,12 @@ class TwitterCrawler:
         except json.JSONDecodeError:
             return {"raw_output": result.stdout}
 
-    def login(self, username: str, password: str) -> bool:
-        try:
-            self._run_browser_command("navigate", "https://twitter.com/i/flow/login")
-            time.sleep(2)
-
-            self._run_browser_command("snapshot", "-i", "--json")
-            self._run_browser_command(
-                "act", "--action", "fill",
-                "--ref", "username_field",
-                "--value", username,
-            )
-            self._run_browser_command("act", "--action", "click", "--ref", "next_button")
-            time.sleep(1)
-
-            self._run_browser_command("snapshot", "-i", "--json")
-            self._run_browser_command(
-                "act", "--action", "fill",
-                "--ref", "password_field",
-                "--value", password,
-            )
-            self._run_browser_command("act", "--action", "click", "--ref", "login_button")
-            time.sleep(2)
-
-            logger.info("Login successful for user: %s", username)
-            return True
-        except RuntimeError:
-            logger.error("Login failed for user: %s", username)
-            return False
-
     def get_for_you_feed(self, limit: int = 50) -> List[Tweet]:
         return self._get_feed("https://twitter.com/home", "for_you", limit)
 
     def get_following_feed(self, limit: int = 50) -> List[Tweet]:
         return self._get_feed(
-            "https://twitter.com/home?tab=following", "following", limit,
+            "https://twitter.com/following", "following", limit,
         )
 
     def _get_feed(self, url: str, feed_type: str, limit: int) -> List[Tweet]:

@@ -91,31 +91,6 @@ class TestRunBrowserCommand:
             crawler._run_browser_command("navigate", "https://twitter.com")
 
 
-class TestLogin:
-    @patch.object(TwitterCrawler, "_run_browser_command")
-    def test_login_success(self, mock_cmd):
-        mock_cmd.side_effect = [
-            {"result": "ok"},              # navigate to login
-            {"result": "ok"},              # snapshot for username field
-            {"result": "ok"},              # fill username
-            {"result": "ok"},              # click next
-            {"result": "ok"},              # snapshot for password field
-            {"result": "ok"},              # fill password
-            {"result": "ok"},              # click login
-        ]
-        crawler = TwitterCrawler()
-        result = crawler.login("testuser", "testpass")
-        assert result is True
-        assert mock_cmd.call_count == 7
-
-    @patch.object(TwitterCrawler, "_run_browser_command")
-    def test_login_navigation_failure(self, mock_cmd):
-        mock_cmd.side_effect = RuntimeError("Browser command failed")
-        crawler = TwitterCrawler()
-        result = crawler.login("testuser", "testpass")
-        assert result is False
-
-
 class TestGetFeeds:
     def _make_snapshot_with_tweets(self, count=3, feed_type="for_you"):
         tweets = []

@@ -16,6 +16,7 @@ Automated Twitter AI content crawler that monitors AI-related tweets from your t
 - Python 3.10+
 - [agent-browser](https://github.com/anthropics/agent-browser) CLI installed and accessible
 - A Chrome/Chromium browser running with CDP enabled on port 18800
+- openclaw browser running with CDP enabled on port 18800, already logged in to Twitter
 
 ## Installation
 
@@ -33,7 +34,7 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
-# Edit .env with your Twitter credentials and settings
+# Edit .env with your settings (no Twitter credentials needed — uses openclaw browser session)
 ```
 
 ## Configuration
@@ -42,8 +43,6 @@ Edit `.env` with your settings:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `TWITTER_USERNAME` | Twitter login username | (required) |
-| `TWITTER_PASSWORD` | Twitter login password | (required) |
 | `FEISHU_WEBHOOK_URL` | Feishu bot webhook URL | (optional) |
 | `CDP_PORT` | Chrome DevTools Protocol port | `18800` |
 | `DB_PATH` | SQLite database file path | `data/tweets.db` |
