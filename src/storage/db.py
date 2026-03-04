@@ -3,9 +3,7 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from typing import List
-
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +181,45 @@ class TweetDatabase:
                 "ORDER BY id",
             )
             return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def get_all_tweet_ids(self) -> set[str]:
+        """Return all tweet ids currently in the DB."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute("SELECT id FROM tweets")
+            return {row[0] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    def get_existing_ids(self, ids: list) -> set[str]:
+        """Return which of the given ids already exist in the DB."""
+        if not ids:
+            return set()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            cursor = conn.execute(
+                f"SELECT id FROM tweets WHERE id IN ({placeholders})", ids
+            )
+            return {row[0] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    def get_last_crawl_start(self) -> Optional[str]:
+        """Return the earliest tweet timestamp from the most recent completed crawl session."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                "SELECT MIN(t.timestamp) FROM tweets t "
+                "JOIN crawl_sessions s ON t.crawl_session_id = s.id "
+                "WHERE s.id = (SELECT id FROM crawl_sessions "
+                "WHERE completed_at IS NOT NULL "
+                "ORDER BY started_at DESC LIMIT 1)"
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
         finally:
             conn.close()
 

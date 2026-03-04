@@ -66,27 +66,28 @@ class TestRunBrowserCommand:
 
 
 class TestGetFeeds:
-    def _make_eval_result(self, count=3):
+    def _make_eval_result(self, count=3, start_id=100):
         tweets = []
         for i in range(count):
             tweets.append({
                 "text": f"AI tweet number {i} about GPT",
                 "author": f"user_{i}",
                 "time": f"2026-03-04T{10 + i:02d}:00:00Z",
-                "url": f"https://x.com/user_{i}/status/{100 + i}",
+                "url": f"https://x.com/user_{i}/status/{start_id + i}",
             })
         return json.dumps(tweets)
 
     @patch("time.sleep")
     @patch.object(TwitterCrawler, "_run_browser_command")
     def test_get_for_you_feed(self, mock_cmd, mock_sleep):
+        """With limit=3 and 3 tweets, stops after first eval (limit reached)."""
         eval_result = self._make_eval_result(3)
         mock_cmd.side_effect = [
             "ok",           # navigate
-            eval_result,    # eval
+            eval_result,    # eval (3 tweets → limit reached)
         ]
         crawler = TwitterCrawler()
-        tweets = crawler.get_for_you_feed(limit=50)
+        tweets = crawler.get_for_you_feed(limit=3)
         assert len(tweets) == 3
         assert all(t["feed_type"] == "for_you" for t in tweets)
         assert tweets[0]["id"] == "100"
@@ -95,22 +96,28 @@ class TestGetFeeds:
     @patch("time.sleep")
     @patch.object(TwitterCrawler, "_run_browser_command")
     def test_get_following_feed(self, mock_cmd, mock_sleep):
+        """With limit=2 and 2 tweets, stops after first eval (limit reached)."""
         eval_result = self._make_eval_result(2)
         mock_cmd.side_effect = [
             "ok",           # navigate
-            eval_result,    # eval
+            eval_result,    # eval (2 tweets → limit reached)
         ]
         crawler = TwitterCrawler()
-        tweets = crawler.get_following_feed(limit=50)
+        tweets = crawler.get_following_feed(limit=2)
         assert len(tweets) == 2
         assert all(t["feed_type"] == "following" for t in tweets)
 
     @patch("time.sleep")
     @patch.object(TwitterCrawler, "_run_browser_command")
     def test_get_feed_empty(self, mock_cmd, mock_sleep):
+        """Empty eval results trigger no_new_content stop after 3 consecutive rounds."""
         mock_cmd.side_effect = [
             "ok",       # navigate
-            "[]",       # eval returns empty array
+            "[]",       # eval round 1 (no new → consecutive=1)
+            "true",     # scroll
+            "[]",       # eval round 2 (no new → consecutive=2)
+            "true",     # scroll
+            "[]",       # eval round 3 (no new → consecutive=3 → stop)
         ]
         crawler = TwitterCrawler()
         tweets = crawler.get_for_you_feed(limit=50)
@@ -126,10 +133,93 @@ class TestGetFeeds:
     @patch("time.sleep")
     @patch.object(TwitterCrawler, "_run_browser_command")
     def test_get_feed_respects_limit(self, mock_cmd, mock_sleep):
+        """5 tweets returned but limit=2 → returns only 2."""
         eval_result = self._make_eval_result(5)
         mock_cmd.side_effect = ["ok", eval_result]
         crawler = TwitterCrawler()
         tweets = crawler.get_for_you_feed(limit=2)
+        assert len(tweets) == 2
+
+    @patch("time.sleep")
+    @patch.object(TwitterCrawler, "_run_browser_command")
+    def test_scroll_pagination_multiple_pages(self, mock_cmd, mock_sleep):
+        """Fetches across multiple scroll pages until limit is reached."""
+        page1 = self._make_eval_result(2, start_id=100)
+        page2 = self._make_eval_result(2, start_id=200)
+        mock_cmd.side_effect = [
+            "ok",       # navigate
+            page1,      # eval page 1 (2 tweets, limit=4 not reached)
+            "true",     # scroll
+            page2,      # eval page 2 (2 more tweets, total=4 → limit reached)
+        ]
+        crawler = TwitterCrawler()
+        tweets = crawler.get_for_you_feed(limit=4)
+        assert len(tweets) == 4
+        assert tweets[0]["id"] == "100"
+        assert tweets[2]["id"] == "200"
+
+    @patch("time.sleep")
+    @patch.object(TwitterCrawler, "_run_browser_command")
+    def test_max_tweets_stop(self, mock_cmd, mock_sleep):
+        """Stops when max_tweets is reached."""
+        eval_result = self._make_eval_result(5)
+        mock_cmd.side_effect = ["ok", eval_result]
+        crawler = TwitterCrawler()
+        tweets = crawler.get_for_you_feed(limit=50, max_tweets=3)
+        assert len(tweets) == 3
+
+    @patch("time.sleep")
+    @patch.object(TwitterCrawler, "_run_browser_command")
+    def test_duplicate_window_stop(self, mock_cmd, mock_sleep):
+        """Stops when sliding window detects 8/10 duplicates."""
+        # Create a mock db with existing IDs
+        mock_db = MagicMock()
+        mock_db.get_all_tweet_ids.return_value = {str(i) for i in range(100, 120)}
+        mock_db.get_last_crawl_start.return_value = None
+
+        # All 10 tweets have IDs in the existing set → window fills with 10 dups
+        tweets_data = []
+        for i in range(10):
+            tweets_data.append({
+                "text": f"Tweet {i}",
+                "author": f"user_{i}",
+                "time": "2026-03-04T10:00:00Z",
+                "url": f"https://x.com/user_{i}/status/{100 + i}",
+            })
+        eval_result = json.dumps(tweets_data)
+        mock_cmd.side_effect = ["ok", eval_result]
+        crawler = TwitterCrawler()
+        tweets = crawler.get_for_you_feed(limit=50, db=mock_db)
+        # Should stop at 10 tweets due to duplicate_window (10/10 >= 8)
+        assert len(tweets) == 10
+
+    @patch("time.sleep")
+    @patch.object(TwitterCrawler, "_run_browser_command")
+    def test_timestamp_early_stop(self, mock_cmd, mock_sleep):
+        """Stops when tweet timestamp is older than last crawl start."""
+        mock_db = MagicMock()
+        mock_db.get_all_tweet_ids.return_value = set()
+        mock_db.get_last_crawl_start.return_value = "2026-03-04T12:00:00Z"
+
+        tweets_data = [
+            {
+                "text": "New tweet",
+                "author": "user_a",
+                "time": "2026-03-04T13:00:00Z",
+                "url": "https://x.com/user_a/status/200",
+            },
+            {
+                "text": "Old tweet",
+                "author": "user_b",
+                "time": "2026-03-04T11:00:00Z",  # Before last_crawl_start
+                "url": "https://x.com/user_b/status/201",
+            },
+        ]
+        eval_result = json.dumps(tweets_data)
+        mock_cmd.side_effect = ["ok", eval_result]
+        crawler = TwitterCrawler()
+        tweets = crawler.get_for_you_feed(limit=50, db=mock_db)
+        # Stops at tweet 2 due to timestamp, both tweets are collected
         assert len(tweets) == 2
 
 

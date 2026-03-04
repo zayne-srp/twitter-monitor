@@ -48,8 +48,8 @@ def run_crawl(limit: int) -> str:
 
     session_id = db.create_session()
 
-    for_you_tweets = crawler.get_for_you_feed(limit=limit)
-    following_tweets = crawler.get_following_feed(limit=limit)
+    for_you_tweets = crawler.get_for_you_feed(limit=limit, max_tweets=limit, db=db)
+    following_tweets = crawler.get_following_feed(limit=limit, max_tweets=limit, db=db)
     all_tweets = for_you_tweets + following_tweets
 
     logger.info("Crawled %d total tweets", len(all_tweets))
