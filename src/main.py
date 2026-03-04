@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 from datetime import datetime, timezone
@@ -24,11 +25,18 @@ def setup_logging() -> None:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(LOG_DIR, f"crawler_{timestamp}.log")
 
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=5 * 1024 * 1024,  # 5MB
+        backupCount=10,
+    )
+    file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
-            logging.FileHandler(log_file),
+            file_handler,
             logging.StreamHandler(sys.stdout),
         ],
     )
@@ -121,6 +129,19 @@ def main() -> None:
         help=f"Report output directory (default: {REPORT_DIR})",
     )
     args = parser.parse_args()
+
+    # Print config status
+    api_key = os.getenv("OPENAI_API_KEY")
+    cdp_port = os.getenv("CDP_PORT", "18800")
+    db_path = os.getenv("DB_PATH", "data/tweets.db")
+    model_name = "gpt-4o-mini"
+    if api_key:
+        print(f"[Config] OpenAI API: ✅ configured ({model_name})")
+    else:
+        print(f"[Config] OpenAI API: ⚠️ not set, using keyword fallback")
+    print(f"[Config] CDP port: {cdp_port}")
+    print(f"[Config] DB path: {db_path}")
+    print(f"[Config] Max tweets per feed: {args.limit}")
 
     setup_logging()
     logger = logging.getLogger(__name__)

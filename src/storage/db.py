@@ -185,23 +185,26 @@ class TweetDatabase:
             conn.close()
 
     def get_all_tweet_ids(self) -> set[str]:
-        """Return all tweet ids currently in the DB."""
+        """Return tweet ids from the last 7 days."""
         conn = sqlite3.connect(self.db_path)
         try:
-            cursor = conn.execute("SELECT id FROM tweets")
+            cursor = conn.execute(
+                "SELECT id FROM tweets WHERE created_at > datetime('now', '-7 days')"
+            )
             return {row[0] for row in cursor.fetchall()}
         finally:
             conn.close()
 
     def get_existing_ids(self, ids: list) -> set[str]:
-        """Return which of the given ids already exist in the DB."""
+        """Return which of the given ids already exist in the DB (last 7 days only)."""
         if not ids:
             return set()
         conn = sqlite3.connect(self.db_path)
         try:
             placeholders = ",".join("?" for _ in ids)
             cursor = conn.execute(
-                f"SELECT id FROM tweets WHERE id IN ({placeholders})", ids
+                f"SELECT id FROM tweets WHERE id IN ({placeholders}) AND created_at > datetime('now', '-7 days')",
+                ids
             )
             return {row[0] for row in cursor.fetchall()}
         finally:

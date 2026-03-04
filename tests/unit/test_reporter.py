@@ -1,4 +1,5 @@
 import os
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -58,6 +59,61 @@ class TestGenerateReport:
         rg = ReportGenerator()
         report = rg.generate_report([], "session-empty")
         assert "No AI-related tweets" in report
+
+
+class TestReportLengthLimits:
+    def test_report_limits_to_20_tweets(self):
+        rg = ReportGenerator()
+        tweets = [
+            _make_tweet(str(i), f"GPT model tweet {i}", f"user{i}")
+            for i in range(25)
+        ]
+        report = rg.generate_report(tweets, "session-limit")
+        assert "**Total AI Tweets**: 25" in report
+        assert "（还有 5 条，已省略）" in report
+        # Only 20 tweets should appear in the body
+        assert f"GPT model tweet 19" in report
+        assert f"GPT model tweet 20" not in report
+
+    def test_report_no_omission_under_20(self):
+        rg = ReportGenerator()
+        tweets = [
+            _make_tweet(str(i), f"GPT model tweet {i}", f"user{i}")
+            for i in range(15)
+        ]
+        report = rg.generate_report(tweets, "session-ok")
+        assert "已省略" not in report
+
+
+class TestSendReportTruncation:
+    @patch.dict("os.environ", {"FEISHU_WEBHOOK_URL": "https://hook.example.com"})
+    @patch("src.reporter.report_generator.requests.post")
+    def test_truncates_long_content(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        rg = ReportGenerator()
+        long_content = "x" * 5000
+        rg.send_report(long_content)
+
+        sent_text = mock_post.call_args[1]["json"]["content"]["text"]
+        assert len(sent_text) <= 3800 + len("...（内容过长已截断）")
+        assert sent_text.endswith("...（内容过长已截断）")
+
+    @patch.dict("os.environ", {"FEISHU_WEBHOOK_URL": "https://hook.example.com"})
+    @patch("src.reporter.report_generator.requests.post")
+    def test_does_not_truncate_short_content(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        rg = ReportGenerator()
+        short_content = "x" * 100
+        rg.send_report(short_content)
+
+        sent_text = mock_post.call_args[1]["json"]["content"]["text"]
+        assert sent_text == short_content
 
 
 class TestSaveReport:

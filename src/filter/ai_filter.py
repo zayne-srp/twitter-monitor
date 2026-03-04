@@ -1,12 +1,14 @@
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
 try:
     from openai import OpenAI
+    from openai import APIConnectionError, APITimeoutError, InternalServerError
     _OPENAI_AVAILABLE = True
 except ImportError:
     _OPENAI_AVAILABLE = False
@@ -65,32 +67,45 @@ class AIFilter:
         return results
 
     def _classify_batch(self, tweets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Classify a batch of tweets with OpenAI."""
+        """Classify a batch of tweets with OpenAI. Retries on transient errors."""
         texts = [t.get('text', '') for t in tweets]
         numbered = '\n'.join(f"{idx + 1}. {text}" for idx, text in enumerate(texts))
 
-        response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an AI content filter. For each tweet, determine if it's related to "
-                        "AI/ML/LLM technology topics. Return a JSON array of booleans, one per tweet, "
-                        "in the same order. Only mark as true if the tweet is genuinely about AI technology "
-                        "(models, tools, research, industry news, etc.). "
-                        "Not about general 'agent' usage unrelated to AI. "
-                        "Return ONLY a JSON array like [true, false, true, ...]"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Classify these {len(tweets)} tweets:\n{numbered}",
-                },
-            ],
-            temperature=0,
-            max_tokens=200,
-        )
+        max_retries = 3
+        retryable_errors = (APIConnectionError, APITimeoutError, InternalServerError)
+
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an AI content filter. For each tweet, determine if it's related to "
+                                "AI/ML/LLM technology topics. Return a JSON array of booleans, one per tweet, "
+                                "in the same order. Only mark as true if the tweet is genuinely about AI technology "
+                                "(models, tools, research, industry news, etc.). "
+                                "Not about general 'agent' usage unrelated to AI. "
+                                "Return ONLY a JSON array like [true, false, true, ...]"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Classify these {len(tweets)} tweets:\n{numbered}",
+                        },
+                    ],
+                    temperature=0,
+                    max_tokens=200,
+                )
+                break
+            except retryable_errors as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt  # 1s, 2s, 4s
+                    logger.warning("OpenAI transient error (attempt %d/%d), retrying in %ds: %s", attempt + 1, max_retries, wait, e)
+                    time.sleep(wait)
+                else:
+                    raise
 
         content = response.choices[0].message.content.strip()
         # Extract JSON array from response

@@ -2,6 +2,7 @@ import json
 from unittest.mock import patch, MagicMock
 
 import pytest
+from openai import APIConnectionError, AuthenticationError
 
 from src.filter.ai_filter import AIFilter
 
@@ -172,3 +173,72 @@ class TestOpenAIFilter:
         result = f.filter_tweets(tweets)
         assert len(result) == 1
         assert result[0]["id"] == "1"
+
+
+class TestRetryLogic:
+    """Tests for retry logic on transient OpenAI errors."""
+
+    @patch("src.filter.ai_filter.time.sleep")
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"})
+    @patch("src.filter.ai_filter.OpenAI")
+    def test_retries_on_connection_error_then_succeeds(self, mock_openai_cls, mock_sleep):
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "[true]"
+
+        mock_client.chat.completions.create.side_effect = [
+            APIConnectionError(request=MagicMock()),
+            APIConnectionError(request=MagicMock()),
+            mock_response,
+        ]
+
+        f = AIFilter()
+        tweets = [_make_tweet("AI model news", "1")]
+        result = f.filter_tweets(tweets)
+        assert len(result) == 1
+        assert mock_client.chat.completions.create.call_count == 3
+        assert mock_sleep.call_count == 2
+
+    @patch("src.filter.ai_filter.time.sleep")
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"})
+    @patch("src.filter.ai_filter.OpenAI")
+    def test_no_retry_on_auth_error(self, mock_openai_cls, mock_sleep):
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+
+        mock_client.chat.completions.create.side_effect = AuthenticationError(
+            message="Invalid API key",
+            response=MagicMock(status_code=401),
+            body=None,
+        )
+
+        f = AIFilter()
+        tweets = [_make_tweet("AI model news", "1")]
+        # Should fall back to keywords (not retry), since AuthenticationError is not retryable
+        result = f.filter_tweets(tweets)
+        assert mock_client.chat.completions.create.call_count == 1
+        assert mock_sleep.call_count == 0
+        # Keyword fallback catches "AI" and "model"
+        assert len(result) == 1
+
+    @patch("src.filter.ai_filter.time.sleep")
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"})
+    @patch("src.filter.ai_filter.OpenAI")
+    def test_raises_after_all_retries_exhausted(self, mock_openai_cls, mock_sleep):
+        mock_client = MagicMock()
+        mock_openai_cls.return_value = mock_client
+
+        mock_client.chat.completions.create.side_effect = APIConnectionError(
+            request=MagicMock(),
+        )
+
+        f = AIFilter()
+        tweets = [_make_tweet("AI model news", "1")]
+        # _classify_batch raises after 3 attempts, _filter_with_openai catches and falls back
+        result = f.filter_tweets(tweets)
+        assert mock_client.chat.completions.create.call_count == 3
+        # Falls back to keyword matching
+        assert len(result) == 1

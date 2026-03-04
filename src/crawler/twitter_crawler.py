@@ -88,6 +88,26 @@ class TwitterCrawler:
             self._run_browser_command("navigate", url)
             time.sleep(2)
 
+            # Login state detection
+            login_check_deadline = time.time() + 5
+            while True:
+                eval_result = self._run_browser_command("eval", "JSON.stringify(document.querySelectorAll('article[data-testid=\"tweet\"]').length)")
+                tweet_count = int(json.loads(eval_result.strip()))
+
+                if tweet_count > 0:
+                    break
+
+                current_url = self._run_browser_command("eval", "JSON.stringify(window.location.href)")
+                current_url = json.loads(current_url.strip())
+
+                if "/login" in current_url or "i/flow/login" in current_url:
+                    raise RuntimeError("Twitter session expired, please re-login")
+
+                if time.time() >= login_check_deadline:
+                    break
+
+                time.sleep(0.5)
+
             existing_ids: set[str] = db.get_all_tweet_ids() if db else set()
             last_crawl_start: Optional[str] = db.get_last_crawl_start() if db else None
 
