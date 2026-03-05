@@ -105,8 +105,16 @@ Include the @ prefix in keys."""
 """
             result = self._run_browser_command("eval", js)
             if "clicked" in result:
-                logger.info("Successfully followed @%s", handle)
-                return True
+                import time as _time
+                _time.sleep(1.5)
+                js_check = 'document.querySelector(\'[data-testid*="unfollow"]\') ? "following" : (Array.from(document.querySelectorAll("button")).find(b => b.innerText && b.innerText.trim() === "Following") ? "following" : "not_following")'
+                confirm_result = self._run_browser_command("eval", js_check)
+                if "following" in confirm_result and "not_following" not in confirm_result:
+                    logger.info("Successfully followed @%s (confirmed)", handle)
+                    return True
+                else:
+                    logger.warning("Follow confirmation failed for @%s", handle)
+                    return False
             else:
                 logger.warning("Follow button not found for @%s", handle)
                 return False
@@ -114,17 +122,18 @@ Include the @ prefix in keys."""
             logger.error("Failed to follow @%s: %s", handle, e)
             return False
 
-    def run(self, ai_tweets: List[dict], db) -> None:
-        """Evaluate authors and follow high-quality ones not yet followed."""
+    def run(self, ai_tweets: List[dict], db) -> List[str]:
+        """Evaluate authors and follow high-quality ones not yet followed. Returns newly followed handles."""
+        newly_followed: List[str] = []
         if not ai_tweets:
             logger.info("No AI tweets to evaluate for auto-follow")
-            return
+            return newly_followed
 
         logger.info("Evaluating %d AI tweets for auto-follow", len(ai_tweets))
         scores = self.evaluate_authors(ai_tweets)
         if not scores:
             logger.warning("No author scores returned")
-            return
+            return newly_followed
 
         logger.info("Author scores: %s", scores)
         already_followed = db.get_followed_accounts()
@@ -148,5 +157,8 @@ Include the @ prefix in keys."""
                 success = self.follow_author(handle)
                 if success:
                     db.save_followed_account(handle)
+                    newly_followed.append(handle)
             else:
                 logger.info("@%s score=%.1f < 7, skipping", handle, score)
+
+        return newly_followed

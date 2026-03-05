@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
 )
 """)
             self._migrate_columns(conn)
+            self._migrate_followed_accounts(conn)
             conn.commit()
         finally:
             conn.close()
@@ -78,6 +79,12 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
                 conn.execute(
                     f"ALTER TABLE tweets ADD COLUMN {col_name} {col_def}"
                 )
+
+    def _migrate_followed_accounts(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("PRAGMA table_info(followed_accounts)")
+        existing = {row[1] for row in cursor.fetchall()}
+        if "verified_at" not in existing:
+            conn.execute("ALTER TABLE followed_accounts ADD COLUMN verified_at TEXT")
 
     def save_tweet(self, tweet: Dict[str, Any], session_id: str) -> bool:
         conn = sqlite3.connect(self.db_path)
@@ -243,13 +250,14 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
         finally:
             conn.close()
 
-    def save_followed_account(self, username: str) -> None:
+    def save_followed_account(self, username: str, verified: bool = True) -> None:
         now = datetime.now(timezone.utc).isoformat()
+        verified_at = now if verified else None
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute(
-                "INSERT OR IGNORE INTO followed_accounts (username, followed_at) VALUES (?, ?)",
-                (username.lstrip("@"), now),
+                "INSERT OR IGNORE INTO followed_accounts (username, followed_at, verified_at) VALUES (?, ?, ?)",
+                (username.lstrip("@"), now, verified_at),
             )
             conn.commit()
         finally:
@@ -274,6 +282,18 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
                 (embedding_json, tweet_id),
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    def get_tweets_missing_embeddings(self, limit: int = 50) -> List[Dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT id, text FROM tweets WHERE embedding IS NULL AND is_ai_related = 1 LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
         finally:
             conn.close()
 

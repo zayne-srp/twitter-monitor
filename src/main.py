@@ -42,7 +42,7 @@ def setup_logging() -> None:
     )
 
 
-def run_crawl(limit: int) -> str:
+def run_crawl(limit: int) -> tuple[str, list[str]]:
     logger = logging.getLogger(__name__)
 
     cdp_port = int(os.getenv("CDP_PORT", "18800"))
@@ -72,10 +72,11 @@ def run_crawl(limit: int) -> str:
     db.mark_ai_related(ai_ids)
 
     # Auto-follow high-quality authors
+    newly_followed: list[str] = []
     try:
         from src.follower.auto_follower import AutoFollower
         follower = AutoFollower(cdp_port=cdp_port)
-        follower.run(ai_tweets, db)
+        newly_followed = follower.run(ai_tweets, db)
     except Exception as e:
         logger.warning("Auto-follow step failed (non-fatal): %s", e)
 
@@ -87,16 +88,24 @@ def run_crawl(limit: int) -> str:
     except Exception as e:
         logger.warning("Tweet indexing step failed (non-fatal): %s", e)
 
+    # Compensate missing embeddings
+    try:
+        from src.search.tweet_indexer import TweetIndexer as _TI
+        comp_indexer = _TI(db)
+        comp_indexer.index_missing(db)
+    except Exception as e:
+        logger.warning("Embedding compensation failed (non-fatal): %s", e)
+
     db.complete_session(
         session_id,
         total_tweets=len(all_tweets),
         ai_tweets_count=len(ai_tweets),
     )
 
-    return session_id
+    return session_id, newly_followed
 
 
-def run_send(output_dir: str) -> str | None:
+def run_send(output_dir: str, followed: list[str] | None = None) -> str | None:
     logger = logging.getLogger(__name__)
 
     db_path = os.getenv("DB_PATH", "data/tweets.db")
@@ -109,6 +118,10 @@ def run_send(output_dir: str) -> str | None:
         return None
 
     report_content = reporter.generate_report(rows, "send")
+
+    if followed:
+        report_content += f"\n\n🤝 本次新关注：{', '.join('@' + h for h in followed)}"
+
     filepath = reporter.save_report(report_content, output_dir)
     logger.info("Report saved: %s", filepath)
 
@@ -188,12 +201,13 @@ def main() -> None:
                 print(f"   {t['url']}\n")
         return
 
+    newly_followed: list[str] = []
     if args.mode in ("crawl", "all"):
-        session_id = run_crawl(args.limit)
+        session_id, newly_followed = run_crawl(args.limit)
         logger.info("Crawl complete (session=%s)", session_id)
 
     if args.mode in ("report", "all"):
-        filepath = run_send(args.output_dir)
+        filepath = run_send(args.output_dir, followed=newly_followed)
         if filepath:
             logger.info("Done. Report at: %s", filepath)
 

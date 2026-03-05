@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re as _re
 import time
 from typing import Any, Dict, List
 
@@ -13,6 +14,8 @@ try:
 except ImportError:
     _OPENAI_AVAILABLE = False
 
+
+SHORT_LINK_RE = _re.compile(r'https?://(bit\.ly|goo\.gl|tinyurl\.com|t\.co|ow\.ly)/\S+')
 
 AI_KEYWORDS = [
     'AI', 'artificial intelligence', 'machine learning', 'deep learning',
@@ -40,8 +43,33 @@ class AIFilter:
         else:
             logger.info("AIFilter: OPENAI_API_KEY not set, using keyword matching fallback")
 
+    def pre_filter(self, tweets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Remove retweets, spam, and empty tweets before AI filtering."""
+        kept = []
+        for tweet in tweets:
+            text = tweet.get('text', '') or ''
+            # Filter pure retweets
+            if text.startswith('RT @'):
+                logger.info("pre_filter: removed retweet: %s", text[:60])
+                continue
+            # Filter empty/too short
+            if len(text.strip()) < 10:
+                logger.info("pre_filter: removed short text: %s", text[:60])
+                continue
+            # Filter suspected ads: has short link AND content after removing links is < 20 chars
+            text_without_links = SHORT_LINK_RE.sub('', text).strip()
+            if SHORT_LINK_RE.search(text) and len(text_without_links) < 20:
+                logger.info("pre_filter: removed suspected ad: %s", text[:60])
+                continue
+            kept.append(tweet)
+        return kept
+
     def filter_tweets(self, tweets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filter tweets, keeping only AI-related ones."""
+        if not tweets:
+            return []
+
+        tweets = self.pre_filter(tweets)
         if not tweets:
             return []
 

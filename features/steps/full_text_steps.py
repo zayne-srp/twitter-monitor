@@ -1,7 +1,7 @@
 import json
 import sys
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 
 from behave import given, when, then
 
@@ -65,3 +65,41 @@ def step_detail_page_fails(context):
 @then("降级返回空字符串，不中断爬取流程")
 def step_fallback_empty_string(context):
     assert context.full_text == ""
+
+
+@given("全文抓取计数器已达上限 30")
+def step_full_text_count_at_max(context):
+    context.crawler._full_text_count = 30
+
+
+@when("爬虫处理一条截断推文")
+def step_process_truncated_tweet_at_max(context):
+    context.tweet_url = "https://x.com/user/status/777"
+    with patch.object(context.crawler, "_run_browser_command") as mock_cmd:
+        context.full_text = context.crawler._fetch_full_text(context.tweet_url)
+        context.mock_cmd = mock_cmd
+
+
+@then("不触发详情页请求，保留卡片原文")
+def step_no_detail_request_at_max(context):
+    assert context.full_text == ""
+    context.mock_cmd.assert_not_called()
+
+
+@when("爬虫处理该截断推文并成功获取全文")
+def step_process_truncated_with_sleep(context):
+    full_text_response = json.dumps(json.dumps("This is the complete full text of the tweet"))
+    with patch.object(context.crawler, "_run_browser_command", return_value=full_text_response) as mock_cmd:
+        with patch("src.crawler.twitter_crawler.time.sleep") as mock_sleep:
+            with patch("src.crawler.twitter_crawler.random.uniform", return_value=2.0):
+                context.full_text = context.crawler._fetch_full_text(context.tweet_url)
+                context.mock_cmd = mock_cmd
+                context.mock_sleep = mock_sleep
+
+
+@then("详情页请求后有随机等待间隔")
+def step_has_random_sleep(context):
+    assert context.full_text == "This is the complete full text of the tweet"
+    # time.sleep is called twice: once with 2 (initial wait) and once with 2.0 (random interval)
+    sleep_calls = context.mock_sleep.call_args_list
+    assert any(c.args[0] == 2.0 for c in sleep_calls), f"Expected random sleep call, got {sleep_calls}"

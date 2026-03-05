@@ -1,11 +1,11 @@
+import json as _json
 import logging
 import os
 from collections import defaultdict
-from datetime import datetime, timezone
 from typing import List
 
 import requests
-
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,44 @@ class ReportGenerator:
                 return category
         return "Opinion & Discussion"
 
+    def cluster_topics(self, tweets):
+        """Use OpenAI to cluster tweets into up to 5 topics. Returns {topic: [tweets]} or None on failure."""
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            return None
+        try:
+            from openai import OpenAI
+        except ImportError:
+            return None
+        client = OpenAI(api_key=api_key)
+        texts = [f"{i+1}. {_get(t,'author','')}: {_get(t,'text','')[:100]}" for i, t in enumerate(tweets)]
+        prompt = f"""Cluster these {len(tweets)} tweets into at most 5 topic groups.
+Return JSON: {{"topics": [{{"name": "Topic Name", "indices": [0,1,2]}}]}}
+Use 0-based indices. Assign every tweet to exactly one topic.
+Tweets:
+""" + "\n".join(texts)
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3, max_tokens=500,
+            )
+            content = response.choices[0].message.content.strip()
+            if '```' in content:
+                content = content.split('```')[1]
+                if content.startswith('json'):
+                    content = content[4:]
+            data = _json.loads(content)
+            result = {}
+            for topic in data.get('topics', []):
+                name = topic['name']
+                indices = topic['indices']
+                result[name] = [tweets[i] for i in indices if i < len(tweets)]
+            return result if result else None
+        except Exception as e:
+            logger.warning("Topic clustering failed: %s", e)
+            return None
+
     def generate_report(self, tweets: List[Dict[str, Any]], session_id: str) -> str:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         lines = [
@@ -63,32 +101,68 @@ class ReportGenerator:
         display_tweets = tweets[:20]
         omitted = len(tweets) - 20 if len(tweets) > 20 else 0
 
-        categorized: dict[str, list[Dict[str, Any]]] = defaultdict(list)
+        # Aggregate by author: keep best tweet per author
+        author_tweets_map = defaultdict(list)
         for tweet in display_tweets:
-            category = self.categorize_tweet(tweet)
-            categorized[category].append(tweet)
+            author = _get(tweet, 'author', '')
+            author_tweets_map[author].append(tweet)
 
-        category_order = [
-            "Models & Research",
-            "Tools & Products",
-            "Industry News",
-            "Tutorials & Technical",
-            "Opinion & Discussion",
-        ]
+        aggregated = []
+        for author, author_tweet_list in author_tweets_map.items():
+            best = max(author_tweet_list, key=lambda t: (
+                _get(t, 'likes', 0),
+                _get(t, 'timestamp', '') or ''
+            ))
+            extra = len(author_tweet_list) - 1
+            aggregated.append((best, extra))
+        display_tweets = [t for t, _ in aggregated]
+        extra_map = {_get(t, 'author', ''): e for t, e in aggregated}
 
-        for category in category_order:
-            cat_tweets = categorized.get(category, [])
-            if not cat_tweets:
-                continue
-            lines.append(f"## {category} ({len(cat_tweets)})")
-            lines.append("")
-            for tweet in cat_tweets:
-                lines.append(
-                    f"- **@{_get(tweet,'author')}**: {_get(tweet,'text')} "
-                    f"[link]({_get(tweet,'url')}) "
-                    f"| ❤ {_get(tweet,'likes',0)} 🔁 {_get(tweet,'retweets',0)}"
-                )
-            lines.append("")
+        clustered = self.cluster_topics(display_tweets)
+        if clustered:
+            for topic_name, topic_tweets in clustered.items():
+                lines.append(f"## {topic_name} ({len(topic_tweets)})")
+                lines.append("")
+                for tweet in topic_tweets:
+                    author = _get(tweet, 'author', '')
+                    extra = extra_map.get(author, 0)
+                    extra_str = f" （另有 {extra} 条）" if extra > 0 else ""
+                    lines.append(
+                        f"- **@{author}**: {_get(tweet,'text')} "
+                        f"[link]({_get(tweet,'url')}) "
+                        f"| ❤ {_get(tweet,'likes',0)} 🔁 {_get(tweet,'retweets',0)}{extra_str}"
+                    )
+                lines.append("")
+        else:
+            categorized: dict[str, list[Dict[str, Any]]] = defaultdict(list)
+            for tweet in display_tweets:
+                category = self.categorize_tweet(tweet)
+                categorized[category].append(tweet)
+
+            category_order = [
+                "Models & Research",
+                "Tools & Products",
+                "Industry News",
+                "Tutorials & Technical",
+                "Opinion & Discussion",
+            ]
+
+            for category in category_order:
+                cat_tweets = categorized.get(category, [])
+                if not cat_tweets:
+                    continue
+                lines.append(f"## {category} ({len(cat_tweets)})")
+                lines.append("")
+                for tweet in cat_tweets:
+                    author = _get(tweet, 'author', '')
+                    extra = extra_map.get(author, 0)
+                    extra_str = f" （另有 {extra} 条）" if extra > 0 else ""
+                    lines.append(
+                        f"- **@{author}**: {_get(tweet,'text')} "
+                        f"[link]({_get(tweet,'url')}) "
+                        f"| ❤ {_get(tweet,'likes',0)} 🔁 {_get(tweet,'retweets',0)}{extra_str}"
+                    )
+                lines.append("")
 
         if omitted > 0:
             lines.append(f"（还有 {omitted} 条，已省略）")

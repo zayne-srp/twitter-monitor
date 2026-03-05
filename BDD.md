@@ -9,9 +9,13 @@ BDD tests using [behave](https://behave.readthedocs.io/) for the Twitter AI Moni
 | Feature File | Scenarios | Description |
 |---|---|---|
 | `crawler.feature` | 3 | Basic crawler behavior: truncation detection, JSON parsing |
-| `full_text.feature` | 3 | Full text fetching: normal tweets, truncated tweets, error fallback |
+| `full_text.feature` | 5 | Full text fetching: normal, truncated, error fallback, rate limit, random delay |
 | `thread.feature` | 3 | Thread crawling: single tweet, multi-tweet thread, dedup on save |
 | `db.feature` | 3 | Database storage: normal save, thread_root_id, duplicate rejection |
+| `follower.feature` | 3 | Auto-follow idempotency: confirm success, confirm failure, skip already followed |
+| `filter.feature` | 3 | Pre-filter noise: retweets, short links, empty texts |
+| `search.feature` | 2 | Embedding compensation: missing embeddings, API retry/skip |
+| `reporter.feature` | 4 | Report generation: author aggregation, topic clustering, fallback |
 
 ## Running
 
@@ -34,9 +38,17 @@ features/
   full_text.feature
   thread.feature
   db.feature
+  follower.feature
+  filter.feature
+  search.feature
+  reporter.feature
   steps/
     crawler_steps.py
     full_text_steps.py
     thread_steps.py
     db_steps.py
+    follower_steps.py
+    filter_steps.py
+    search_steps.py
+    reporter_steps.py
 ```

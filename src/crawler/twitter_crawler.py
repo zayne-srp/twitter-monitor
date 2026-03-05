@@ -1,5 +1,6 @@
 import json
 import logging
+import random
 import subprocess
 import time
 from collections import deque
@@ -61,9 +62,13 @@ class Tweet:
     feed_type: str
 
 class TwitterCrawler:
-    def __init__(self, cdp_port: int = 18800, full_text_mode: bool = True):
+    def __init__(self, cdp_port: int = 18800, full_text_mode: bool = True,
+                 full_text_concurrency: int = 3, full_text_max: int = 30):
         self.cdp_port = cdp_port
         self.full_text_mode = full_text_mode
+        self.full_text_concurrency = full_text_concurrency
+        self.full_text_max = full_text_max
+        self._full_text_count = 0
 
     def _run_browser_command(self, *args: str) -> str:
         cmd = ["agent-browser", "--cdp", str(self.cdp_port), *args]
@@ -89,6 +94,9 @@ class TwitterCrawler:
         return stripped.endswith("\u2026") or stripped.endswith("...")
 
     def _fetch_full_text(self, tweet_url: str) -> str:
+        if self._full_text_count >= self.full_text_max:
+            logger.info("Full-text max (%d) reached, skipping detail page for %s", self.full_text_max, tweet_url)
+            return ""
         try:
             self._run_browser_command("open", tweet_url)
             time.sleep(2)
@@ -101,7 +109,11 @@ JSON.stringify(el ? el.innerText : '')
             data = json.loads(raw)
             if isinstance(data, str):
                 data = json.loads(data)
-            return data if isinstance(data, str) else ""
+            result = data if isinstance(data, str) else ""
+            if result:
+                self._full_text_count += 1
+                time.sleep(random.uniform(1.5, 3.0))
+            return result
         except Exception as e:
             logger.warning("Failed to fetch full text for %s: %s", tweet_url, e)
             return ""
@@ -233,6 +245,7 @@ JSON.stringify(el ? el.innerText : '')
                 "Fetched %d tweets from %s feed (stop_reason=%s)",
                 len(all_tweets), feed_type, stop_reason,
             )
+            logger.info("Full-text fetches this session: %d", self._full_text_count)
             return all_tweets[:limit]
 
         except RuntimeError:
