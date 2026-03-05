@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
             ("sent_at", "TEXT"),
             ("embedding", "TEXT"),
             ("thread_root_id", "TEXT"),
+            ("is_duplicate", "INTEGER DEFAULT 0"),
+            ("duplicate_of", "TEXT"),
         ]
         for col_name, col_def in migrations:
             if col_name not in existing:
@@ -294,6 +296,48 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
                 (limit,)
             ).fetchall()
             return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def get_tweets_with_embeddings_recent(self, hours: int = 48) -> List[dict]:
+        """Return tweets from last N hours that have an embedding."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM tweets "
+                "WHERE embedding IS NOT NULL "
+                "AND created_at >= datetime('now', ? || ' hours') "
+                "ORDER BY created_at DESC",
+                (f"-{hours}",),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def mark_duplicate(self, tweet_id: str, duplicate_of: str) -> None:
+        """Mark a tweet as a semantic duplicate of another tweet."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "UPDATE tweets SET is_duplicate = 1, duplicate_of = ? WHERE id = ?",
+                (duplicate_of, tweet_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_non_duplicate_ai_tweets(self) -> List[dict]:
+        """Return AI-related tweets that are not duplicates and not yet sent."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM tweets "
+                "WHERE is_ai_related = 1 AND is_duplicate = 0 AND sent = 0 "
+                "ORDER BY id",
+            )
+            return [dict(row) for row in cursor.fetchall()]
         finally:
             conn.close()
 

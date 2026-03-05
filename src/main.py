@@ -96,6 +96,19 @@ def run_crawl(limit: int) -> tuple[str, list[str]]:
     except Exception as e:
         logger.warning("Embedding compensation failed (non-fatal): %s", e)
 
+    # Semantic deduplication
+    try:
+        from src.search.semantic_dedup import SemanticDeduplicator
+        deduplicator = SemanticDeduplicator()
+        new_tweets = db.get_tweets_by_session(session_id)
+        existing_tweets = db.get_tweets_with_embeddings_recent(hours=48)
+        dedup_ids = deduplicator.deduplicate(new_tweets, existing_tweets)
+        for tweet_id, dup_of in dedup_ids:
+            db.mark_duplicate(tweet_id, dup_of)
+        logger.info("Marked %d tweets as semantic duplicates", len(dedup_ids))
+    except Exception as e:
+        logger.warning("Semantic dedup failed (non-fatal): %s", e)
+
     db.complete_session(
         session_id,
         total_tweets=len(all_tweets),
@@ -112,7 +125,7 @@ def run_send(output_dir: str, followed: list[str] | None = None) -> str | None:
     db = TweetDatabase(db_path)
     reporter = ReportGenerator()
 
-    rows = db.get_unsent_ai_tweets()
+    rows = db.get_non_duplicate_ai_tweets()
     if not rows:
         logger.info("No unsent AI tweets to report")
         return None

@@ -16,6 +16,7 @@ BDD tests using [behave](https://behave.readthedocs.io/) for the Twitter AI Moni
 | `filter.feature` | 3 | Pre-filter noise: retweets, short links, empty texts |
 | `search.feature` | 2 | Embedding compensation: missing embeddings, API retry/skip |
 | `reporter.feature` | 4 | Report generation: author aggregation, topic clustering, fallback |
+| `dedup.feature` | 4 | Semantic dedup: high similarity marked, low similarity kept, no-embedding skipped, report excludes duplicates |
 
 ## Running
 
@@ -42,6 +43,7 @@ features/
   filter.feature
   search.feature
   reporter.feature
+  dedup.feature
   steps/
     crawler_steps.py
     full_text_steps.py
@@ -51,4 +53,5 @@ features/
     filter_steps.py
     search_steps.py
     reporter_steps.py
+    dedup_steps.py
 ```
