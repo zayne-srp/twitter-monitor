@@ -71,6 +71,22 @@ def run_crawl(limit: int) -> str:
     ai_ids = [t["id"] for t in ai_tweets]
     db.mark_ai_related(ai_ids)
 
+    # Auto-follow high-quality authors
+    try:
+        from src.follower.auto_follower import AutoFollower
+        follower = AutoFollower(cdp_port=cdp_port)
+        follower.run(ai_tweets, db)
+    except Exception as e:
+        logger.warning("Auto-follow step failed (non-fatal): %s", e)
+
+    # Index embeddings for new tweets
+    try:
+        from src.search.tweet_indexer import TweetIndexer
+        indexer = TweetIndexer(db)
+        indexer.index_tweets(all_tweets)
+    except Exception as e:
+        logger.warning("Tweet indexing step failed (non-fatal): %s", e)
+
     db.complete_session(
         session_id,
         total_tweets=len(all_tweets),
@@ -113,7 +129,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Twitter AI Monitor")
     parser.add_argument(
         "--mode",
-        choices=["crawl", "report", "all"],
+        choices=["crawl", "report", "search", "all"],
         default="all",
         help="Operation mode (default: all)",
     )
@@ -122,6 +138,12 @@ def main() -> None:
         type=int,
         default=50,
         help="Max tweets per feed (default: 50)",
+    )
+    parser.add_argument(
+        "--query",
+        type=str,
+        default=None,
+        help="Search query (required for search mode)",
     )
     parser.add_argument(
         "--output-dir",
@@ -146,6 +168,25 @@ def main() -> None:
     setup_logging()
     logger = logging.getLogger(__name__)
     logger.info("Twitter AI Monitor started (mode=%s)", args.mode)
+
+    if args.mode == "search":
+        if not args.query:
+            print("Error: --query required for search mode")
+            sys.exit(1)
+        from src.search.semantic_search import SemanticSearch
+        db_path_search = os.getenv("DB_PATH", "data/tweets.db")
+        db = TweetDatabase(db_path_search)
+        searcher = SemanticSearch(db)
+        results = searcher.search(args.query, top_k=10)
+        if not results:
+            print("No results found.")
+        else:
+            print(f"\nTop {len(results)} results for: {args.query!r}\n")
+            for i, t in enumerate(results, 1):
+                print(f"{i}. [{t['similarity_score']:.3f}] @{t['author']}")
+                print(f"   {t['text'][:200]}")
+                print(f"   {t['url']}\n")
+        return
 
     if args.mode in ("crawl", "all"):
         session_id = run_crawl(args.limit)

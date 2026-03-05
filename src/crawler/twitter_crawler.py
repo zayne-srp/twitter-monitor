@@ -28,6 +28,23 @@ document.querySelectorAll('article[data-testid="tweet"]').forEach(article => {
 JSON.stringify(tweets)
 """
 
+THREAD_EVAL_JS = """
+const tweets = [];
+document.querySelectorAll('article[data-testid="tweet"]').forEach(article => {
+  const textEl = article.querySelector('[data-testid="tweetText"]');
+  const authorEl = article.querySelector('[data-testid="User-Name"] a span');
+  const timeEl = article.querySelector('time');
+  const linkEl = article.querySelector('a[href*="/status/"]');
+  tweets.push({
+    text: textEl ? textEl.innerText : '',
+    author: authorEl ? authorEl.innerText : '',
+    time: timeEl ? timeEl.getAttribute('datetime') : '',
+    url: linkEl ? 'https://x.com' + linkEl.getAttribute('href') : ''
+  });
+});
+JSON.stringify(tweets)
+"""
+
 SCROLL_JS = "window.scrollBy(0, window.innerHeight * 2); true"
 
 
@@ -44,8 +61,9 @@ class Tweet:
     feed_type: str
 
 class TwitterCrawler:
-    def __init__(self, cdp_port: int = 18800):
+    def __init__(self, cdp_port: int = 18800, full_text_mode: bool = True):
         self.cdp_port = cdp_port
+        self.full_text_mode = full_text_mode
 
     def _run_browser_command(self, *args: str) -> str:
         cmd = ["agent-browser", "--cdp", str(self.cdp_port), *args]
@@ -65,6 +83,44 @@ class TwitterCrawler:
             )
 
         return result.stdout
+
+    def _is_truncated(self, text: str) -> bool:
+        stripped = text.rstrip()
+        return stripped.endswith("\u2026") or stripped.endswith("...")
+
+    def _fetch_full_text(self, tweet_url: str) -> str:
+        try:
+            self._run_browser_command("open", tweet_url)
+            time.sleep(2)
+            js = """
+const art = document.querySelector('article[data-testid="tweet"]');
+const el = art ? art.querySelector('[data-testid="tweetText"]') : null;
+JSON.stringify(el ? el.innerText : '')
+"""
+            raw = self._run_browser_command("eval", js)
+            data = json.loads(raw)
+            if isinstance(data, str):
+                data = json.loads(data)
+            return data if isinstance(data, str) else ""
+        except Exception as e:
+            logger.warning("Failed to fetch full text for %s: %s", tweet_url, e)
+            return ""
+
+    def _fetch_thread_tweets(self, tweet_url: str, feed_type: str) -> List[Dict[str, Any]]:
+        try:
+            self._run_browser_command("open", tweet_url)
+            time.sleep(2)
+            raw = self._run_browser_command("eval", THREAD_EVAL_JS)
+            thread_items = self._parse_tweets_from_eval(raw, "thread")
+            if not thread_items:
+                return []
+            root_id = thread_items[0]["id"]
+            for item in thread_items:
+                item["thread_root_id"] = root_id
+            return thread_items
+        except Exception as e:
+            logger.warning("Failed to fetch thread for %s: %s", tweet_url, e)
+            return []
 
     def get_for_you_feed(
         self, limit: int = 50, max_tweets: int = 500, db: Optional["TweetDatabase"] = None,
@@ -132,6 +188,15 @@ class TwitterCrawler:
                     is_dup = tweet_id in existing_ids
                     window.append(1 if is_dup else 0)
                     all_tweets.append(tweet)
+
+                    if self.full_text_mode and self._is_truncated(tweet["text"]):
+                        thread = self._fetch_thread_tweets(tweet["url"], feed_type)
+                        if thread:
+                            tweet["text"] = thread[0]["text"]
+                            for t in thread[1:]:
+                                if t["id"] and t["id"] not in seen_ids:
+                                    seen_ids.add(t["id"])
+                                    all_tweets.append(t)
 
                     if len(all_tweets) >= max_tweets:
                         stop_reason = "max_tweets"

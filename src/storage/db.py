@@ -52,6 +52,12 @@ class TweetDatabase:
         try:
             conn.execute(_CREATE_TWEETS_TABLE)
             conn.execute(_CREATE_SESSIONS_TABLE)
+            conn.execute("""
+CREATE TABLE IF NOT EXISTS followed_accounts (
+    username TEXT PRIMARY KEY,
+    followed_at TEXT NOT NULL
+)
+""")
             self._migrate_columns(conn)
             conn.commit()
         finally:
@@ -64,6 +70,8 @@ class TweetDatabase:
             ("is_ai_related", "INTEGER DEFAULT 0"),
             ("sent", "INTEGER DEFAULT 0"),
             ("sent_at", "TEXT"),
+            ("embedding", "TEXT"),
+            ("thread_root_id", "TEXT"),
         ]
         for col_name, col_def in migrations:
             if col_name not in existing:
@@ -77,12 +85,13 @@ class TweetDatabase:
             cursor = conn.execute(
                 "INSERT OR IGNORE INTO tweets "
                 "(id, text, author, url, timestamp, likes, retweets, "
-                "feed_type, crawl_session_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "feed_type, crawl_session_id, thread_root_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     _get(tweet,"id"), _get(tweet,"text"), _get(tweet,"author"), _get(tweet,"url"),
                     _get(tweet,"timestamp",""), _get(tweet,"likes",0),
                     _get(tweet,"retweets",0), _get(tweet,"feed_type"), session_id,
+                    _get(tweet,"thread_root_id"),
                 ),
             )
             conn.commit()
@@ -223,6 +232,48 @@ class TweetDatabase:
             )
             row = cursor.fetchone()
             return row[0] if row else None
+        finally:
+            conn.close()
+
+    def get_followed_accounts(self) -> set:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute("SELECT username FROM followed_accounts")
+            return {row[0] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    def save_followed_account(self, username: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO followed_accounts (username, followed_at) VALUES (?, ?)",
+                (username.lstrip("@"), now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_tweets_with_embeddings(self) -> List[dict]:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                "SELECT id, text, author, url, timestamp, embedding FROM tweets WHERE embedding IS NOT NULL"
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def save_embedding(self, tweet_id: str, embedding_json: str) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "UPDATE tweets SET embedding = ? WHERE id = ?",
+                (embedding_json, tweet_id),
+            )
+            conn.commit()
         finally:
             conn.close()
 
