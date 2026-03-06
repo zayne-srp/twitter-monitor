@@ -125,3 +125,93 @@ class TestSaveReport:
         assert filepath.endswith(".md")
         with open(filepath) as f:
             assert f.read() == content
+
+
+class TestClusterTopicsDeduplication:
+    """Verify that cluster_topics is called at most once per pipeline run.
+
+    Previously both generate_report() and send_as_card() each called
+    cluster_topics() independently, doubling the OpenAI API spend per run.
+    The fix: pass pre-computed clusters via the ``clustered`` keyword arg so
+    the internal call is skipped.
+    """
+
+    def _make_tweet_dict(self, tweet_id: str, text: str, author: str = "user") -> dict:
+        return {
+            "id": tweet_id,
+            "text": text,
+            "author": author,
+            "url": f"https://twitter.com/{author}/status/{tweet_id}",
+            "timestamp": "2026-03-04T10:00:00Z",
+            "likes": 10,
+            "retweets": 5,
+            "feed_type": "for_you",
+        }
+
+    def test_generate_report_uses_provided_clustered(self):
+        """generate_report skips cluster_topics when clustered is provided."""
+        rg = ReportGenerator()
+        tweets = [self._make_tweet_dict(str(i), f"GPT tweet {i}", f"user{i}") for i in range(3)]
+        precomputed = {"AI Models": tweets}
+
+        with patch.object(rg, "cluster_topics") as mock_cluster:
+            rg.generate_report(tweets, "s1", clustered=precomputed)
+            mock_cluster.assert_not_called()
+
+    def test_generate_report_calls_cluster_topics_when_none(self):
+        """generate_report falls back to calling cluster_topics when clustered=None."""
+        rg = ReportGenerator()
+        tweets = [self._make_tweet_dict(str(i), f"GPT tweet {i}", f"user{i}") for i in range(3)]
+
+        with patch.object(rg, "cluster_topics", return_value=None) as mock_cluster:
+            rg.generate_report(tweets, "s1", clustered=None)
+            mock_cluster.assert_called_once()
+
+    @patch.dict("os.environ", {"FEISHU_WEBHOOK_URL": "https://hook.example.com"})
+    @patch("src.reporter.report_generator.requests.post")
+    def test_send_as_card_uses_provided_clustered(self, mock_post):
+        """send_as_card skips cluster_topics when clustered is provided."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        rg = ReportGenerator()
+        tweets = [self._make_tweet_dict(str(i), f"GPT tweet {i}", f"user{i}") for i in range(3)]
+        precomputed = {"AI Models": tweets}
+
+        with patch("src.reporter.feishu_card.build_card", return_value={"msg_type": "interactive", "card": {}}) as mock_build, \
+             patch.object(rg, "cluster_topics") as mock_cluster:
+            rg.send_as_card(tweets, "s1", "2026-03-07", clustered=precomputed)
+            mock_cluster.assert_not_called()
+            mock_build.assert_called_once()
+            _, kwargs = mock_build.call_args
+            assert kwargs.get("clustered") is precomputed
+
+    @patch.dict("os.environ", {"FEISHU_WEBHOOK_URL": "https://hook.example.com"})
+    @patch("src.reporter.report_generator.requests.post")
+    def test_pipeline_calls_cluster_topics_exactly_once(self, mock_post):
+        """Integration: when caller shares clusters, total API calls == 1."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        rg = ReportGenerator()
+        tweets = [self._make_tweet_dict(str(i), f"GPT tweet {i}", f"user{i}") for i in range(3)]
+
+        call_count = 0
+        original_cluster = rg.cluster_topics.__func__
+
+        def counting_cluster(self_inner, tw):
+            nonlocal call_count
+            call_count += 1
+            return {"AI Models": tw}
+
+        with patch.object(ReportGenerator, "cluster_topics", counting_cluster), \
+             patch("src.reporter.feishu_card.build_card", return_value={"msg_type": "interactive", "card": {}}):
+
+            # Simulate what run_send() now does: cluster once, share the result
+            clustered = rg.cluster_topics(tweets[:20])
+            rg.generate_report(tweets, "s1", clustered=clustered)
+            rg.send_as_card(tweets, "s1", "2026-03-07", clustered=clustered)
+
+        assert call_count == 1, f"cluster_topics called {call_count} times, expected 1"
