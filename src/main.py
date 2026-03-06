@@ -125,22 +125,34 @@ def run_send(output_dir: str, followed: list[str] | None = None) -> str | None:
     db = TweetDatabase(db_path)
     reporter = ReportGenerator()
 
+    from datetime import datetime, timezone as _tz
+
     rows = db.get_non_duplicate_ai_tweets()
-    if not rows:
-        logger.info("No unsent AI tweets to report")
-        return None
 
-    report_content = reporter.generate_report(rows, "send")
-
+    # Always generate and save the markdown report as an artifact
+    report_content = reporter.generate_report(rows or [], "send")
     if followed:
         report_content += f"\n\n🤝 本次新关注：{', '.join('@' + h for h in followed)}"
 
     filepath = reporter.save_report(report_content, output_dir)
     logger.info("Report saved: %s", filepath)
 
-    sent_via_webhook = reporter.send_report(report_content)
+    if not rows:
+        logger.info("No unsent AI tweets to report")
+        # Still send an empty card so the daily run is always visible in Feishu
+        generated_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
+        reporter.send_as_card([], session_id="—", generated_at=generated_at)
+        return None
+
+    generated_at = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M UTC")
+    sent_via_webhook = reporter.send_as_card(
+        rows,
+        session_id="send",
+        generated_at=generated_at,
+        followed=followed,
+    )
     if sent_via_webhook:
-        logger.info("Report sent via Feishu webhook")
+        logger.info("Report sent as Feishu interactive card")
     else:
         logger.info("Report printed to stdout (no webhook configured)")
 
