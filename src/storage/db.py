@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS crawl_sessions (
 )
 """
 
+_INSERT_TWEET_SQL = (
+    "INSERT OR IGNORE INTO tweets "
+    "(id, text, author, url, timestamp, likes, retweets, "
+    "feed_type, crawl_session_id, thread_root_id) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
 
 
 def _get(obj, key, default=None):
@@ -39,6 +45,22 @@ def _get(obj, key, default=None):
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _tweet_row(tweet: Dict[str, Any], session_id: str) -> tuple:
+    """Convert a tweet dict/dataclass to a DB row tuple."""
+    return (
+        _get(tweet, "id"),
+        _get(tweet, "text"),
+        _get(tweet, "author"),
+        _get(tweet, "url"),
+        _get(tweet, "timestamp", ""),
+        _get(tweet, "likes", 0),
+        _get(tweet, "retweets", 0),
+        _get(tweet, "feed_type"),
+        session_id,
+        _get(tweet, "thread_root_id"),
+    )
 
 
 class TweetDatabase:
@@ -89,31 +111,40 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
             conn.execute("ALTER TABLE followed_accounts ADD COLUMN verified_at TEXT")
 
     def save_tweet(self, tweet: Dict[str, Any], session_id: str) -> bool:
+        """Insert a single tweet. Returns True if the tweet was new (not a duplicate)."""
         conn = sqlite3.connect(self.db_path)
         try:
-            cursor = conn.execute(
-                "INSERT OR IGNORE INTO tweets "
-                "(id, text, author, url, timestamp, likes, retweets, "
-                "feed_type, crawl_session_id, thread_root_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    _get(tweet,"id"), _get(tweet,"text"), _get(tweet,"author"), _get(tweet,"url"),
-                    _get(tweet,"timestamp",""), _get(tweet,"likes",0),
-                    _get(tweet,"retweets",0), _get(tweet,"feed_type"), session_id,
-                    _get(tweet,"thread_root_id"),
-                ),
-            )
+            cursor = conn.execute(_INSERT_TWEET_SQL, _tweet_row(tweet, session_id))
             conn.commit()
             return cursor.rowcount > 0
         finally:
             conn.close()
 
     def save_tweets(self, tweets: List[Dict[str, Any]], session_id: str) -> int:
-        saved = 0
-        for tweet in tweets:
-            if self.save_tweet(tweet, session_id):
-                saved += 1
-        return saved
+        """Batch-insert tweets in a single connection/transaction.
+
+        Uses ``executemany`` + ``INSERT OR IGNORE`` so duplicates are silently
+        skipped.  The number of *newly inserted* rows is determined by comparing
+        the row-count before and after the bulk insert, which avoids opening a
+        separate connection for every tweet (the previous N+1 pattern).
+
+        Returns:
+            Number of tweets that were actually inserted (i.e. not duplicates).
+        """
+        if not tweets:
+            return 0
+
+        rows = [_tweet_row(t, session_id) for t in tweets]
+        conn = sqlite3.connect(self.db_path)
+        try:
+            # Snapshot total rows before insert so we can compute newly inserted.
+            before = conn.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
+            conn.executemany(_INSERT_TWEET_SQL, rows)
+            conn.commit()
+            after = conn.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
+            return after - before
+        finally:
+            conn.close()
 
     def get_tweets_by_session(self, session_id: str) -> List[dict]:
         conn = sqlite3.connect(self.db_path)
