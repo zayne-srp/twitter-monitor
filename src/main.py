@@ -80,21 +80,15 @@ def run_crawl(limit: int) -> tuple[str, list[str]]:
     except Exception as e:
         logger.warning("Auto-follow step failed (non-fatal): %s", e)
 
-    # Index embeddings for AI-related tweets only (saves API cost vs indexing all)
+    # Index embeddings for AI-related tweets, then backfill any missing ones —
+    # both steps share a single TweetIndexer instance to avoid duplicate init cost.
     try:
         from src.search.tweet_indexer import TweetIndexer
         indexer = TweetIndexer(db)
         indexer.index_tweets(ai_tweets)
+        indexer.index_missing(db)
     except Exception as e:
         logger.warning("Tweet indexing step failed (non-fatal): %s", e)
-
-    # Compensate missing embeddings
-    try:
-        from src.search.tweet_indexer import TweetIndexer as _TI
-        comp_indexer = _TI(db)
-        comp_indexer.index_missing(db)
-    except Exception as e:
-        logger.warning("Embedding compensation failed (non-fatal): %s", e)
 
     # Semantic deduplication
     try:
