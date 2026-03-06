@@ -55,6 +55,11 @@ def embed_texts_batch(texts: List[str], client: OpenAI = None, batch_size: int =
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
+    """Compute cosine similarity between two vectors (pure-Python fallback).
+
+    Prefer ``cosine_similarities_matrix`` for batch operations — it is orders
+    of magnitude faster thanks to numpy BLAS kernels.
+    """
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
@@ -63,13 +68,61 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def cosine_similarities_matrix(query: List[float], corpus: List[List[float]]) -> List[float]:
+    """Compute cosine similarity between *query* and every vector in *corpus*.
+
+    Uses numpy for vectorised computation: stacks all corpus vectors into an
+    (N, D) matrix and computes the dot products in a single BLAS call, then
+    divides by the precomputed norms.  This is 10–100× faster than calling
+    :func:`cosine_similarity` in a Python loop.
+
+    OpenAI ``text-embedding-3-small`` embeddings are already L2-normalised,
+    so the division step degenerates to a no-op in practice — but we keep it
+    for correctness with arbitrary vectors.
+
+    Args:
+        query:  Single query vector of dimension D.
+        corpus: List of N vectors each of dimension D.
+
+    Returns:
+        List of N similarity scores in the same order as *corpus*.
+    """
+    try:
+        import numpy as np  # optional fast path
+    except ImportError:  # pragma: no cover — fallback for environments without numpy
+        return [cosine_similarity(query, v) for v in corpus]
+
+    if not corpus:
+        return []
+
+    q = np.array(query, dtype=np.float32)
+    C = np.array(corpus, dtype=np.float32)  # (N, D)
+
+    # Dot products: (N,)
+    dots = C @ q
+
+    # Norms
+    q_norm = np.linalg.norm(q)
+    c_norms = np.linalg.norm(C, axis=1)
+
+    # Guard against zero-norm vectors
+    denom = c_norms * q_norm
+    denom = np.where(denom == 0, 1e-10, denom)
+
+    return (dots / denom).tolist()
+
+
 class SemanticSearch:
     def __init__(self, db):
         self.db = db
         self.client = OpenAI()
 
     def search(self, query: str, top_k: int = 10) -> List[dict]:
-        """Search tweets by semantic similarity to query."""
+        """Search tweets by semantic similarity to query.
+
+        Uses ``cosine_similarities_matrix`` for a single vectorised BLAS pass
+        over all stored embeddings instead of a per-tweet Python loop.
+        """
         logger.info("Semantic search: query=%r, top_k=%d", query, top_k)
         query_embedding = embed_text(query, self.client)
 
@@ -78,19 +131,32 @@ class SemanticSearch:
             logger.warning("No tweets with embeddings found")
             return []
 
-        scored = []
+        # Parse embeddings and keep only valid ones
+        valid_tweets: List[dict] = []
+        corpus: List[List[float]] = []
         for tweet in all_tweets:
             emb_json = tweet.get("embedding")
             if not emb_json:
                 continue
             try:
-                emb = json.loads(emb_json)
-                score = cosine_similarity(query_embedding, emb)
-                scored.append((score, tweet))
+                emb = json.loads(emb_json) if isinstance(emb_json, str) else emb_json
+                valid_tweets.append(tweet)
+                corpus.append(emb)
             except Exception as e:
                 logger.debug("Skipping tweet %s: %s", tweet.get("id"), e)
 
-        scored.sort(key=lambda x: x[0], reverse=True)
+        if not corpus:
+            return []
+
+        # Single vectorised similarity computation — replaces the O(N) Python loop
+        scores = cosine_similarities_matrix(query_embedding, corpus)
+
+        scored = sorted(
+            zip(scores, valid_tweets),
+            key=lambda x: x[0],
+            reverse=True,
+        )
+
         results = []
         for score, tweet in scored[:top_k]:
             t = dict(tweet)
