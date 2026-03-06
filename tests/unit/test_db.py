@@ -206,3 +206,60 @@ class TestGetLastCrawlStart:
 
         result = db.get_last_crawl_start()
         assert result == "2026-03-04T09:00:00Z"
+
+
+class TestSaveTweetsBatchBehavior:
+    """Tests specific to the batch-insert implementation of save_tweets."""
+
+    def test_large_batch_correctness(self, db):
+        """All tweets in a large batch should be persisted exactly once."""
+        session_id = db.create_session()
+        tweets = [_make_tweet(str(i)) for i in range(100)]
+        count = db.save_tweets(tweets, session_id)
+        assert count == 100
+        stored = db.get_tweets_by_session(session_id)
+        assert len(stored) == 100
+
+    def test_batch_with_all_duplicates(self, db):
+        """Batch of entirely duplicate tweets should return 0."""
+        session_id = db.create_session()
+        tweets = [_make_tweet(str(i)) for i in range(5)]
+        db.save_tweets(tweets, session_id)
+        count = db.save_tweets(tweets, session_id)
+        assert count == 0
+
+    def test_batch_preserves_tweet_fields(self, db):
+        """Fields should be stored verbatim by the batch insert."""
+        session_id = db.create_session()
+        tweet = {
+            "id": "batch_field_test",
+            "text": "Field preservation test",
+            "author": "field_author",
+            "url": "https://twitter.com/field_author/status/batch_field_test",
+            "timestamp": "2026-03-07T00:00:00Z",
+            "likes": 42,
+            "retweets": 7,
+            "feed_type": "following",
+            "thread_root_id": "root_123",
+        }
+        db.save_tweets([tweet], session_id)
+        stored = db.get_tweets_by_session(session_id)
+        assert len(stored) == 1
+        row = stored[0]
+        assert row["id"] == "batch_field_test"
+        assert row["text"] == "Field preservation test"
+        assert row["author"] == "field_author"
+        assert row["likes"] == 42
+        assert row["retweets"] == 7
+        assert row["feed_type"] == "following"
+        assert row["thread_root_id"] == "root_123"
+
+    def test_batch_mixed_new_and_duplicate(self, db):
+        """Partial overlap: only truly new tweets are counted."""
+        session_id = db.create_session()
+        # Pre-insert tweets 0-4
+        db.save_tweets([_make_tweet(str(i)) for i in range(5)], session_id)
+        # Batch that overlaps 3-4 (dup) + 5-9 (new)
+        mixed = [_make_tweet(str(i)) for i in range(3, 10)]
+        count = db.save_tweets(mixed, session_id)
+        assert count == 5  # only 5-9 are new
