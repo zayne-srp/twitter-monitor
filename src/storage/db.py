@@ -200,12 +200,11 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
             return cursor.rowcount > 0
 
     def save_tweets(self, tweets: List[Dict[str, Any]], session_id: str) -> int:
-        """Batch-insert tweets in a single connection/transaction.
+        """Batch-insert tweets; also refresh engagement for already-stored tweets.
 
-        Uses ``executemany`` + ``INSERT OR IGNORE`` so duplicates are silently
-        skipped.  The number of *newly inserted* rows is determined by comparing
-        the row-count before and after the bulk insert, which avoids opening a
-        separate connection for every tweet (the previous N+1 pattern).
+        Uses ``executemany`` + ``INSERT OR IGNORE`` for new tweets, then
+        :meth:`update_engagements` to refresh likes/retweets on duplicates so
+        that engagement counts never go stale across crawl runs.
 
         Returns:
             Number of tweets that were actually inserted (i.e. not duplicates).
@@ -214,12 +213,62 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
             return 0
 
         rows = [_tweet_row(t, session_id) for t in tweets]
+        pairs = [
+            (_get(t, "likes", 0), _get(t, "retweets", 0), _get(t, "id"))
+            for t in tweets
+            if _get(t, "id")
+        ]
         with self._auto_conn() as conn:
             before = conn.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
             conn.executemany(_INSERT_TWEET_SQL, rows)
+            # Refresh engagement (likes / retweets) for tweets that were already
+            # in the DB (i.e. INSERT OR IGNORE silently skipped them).
+            # MAX() ensures we only ever increase engagement counts, never decrease.
+            if pairs:
+                conn.executemany(
+                    "UPDATE tweets "
+                    "SET likes = MAX(likes, ?), retweets = MAX(retweets, ?) "
+                    "WHERE id = ?",
+                    pairs,
+                )
             conn.commit()
             after = conn.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
-            return after - before
+
+        return after - before
+
+    def update_engagements(self, tweets: List[Dict[str, Any]]) -> int:
+        """Update likes and retweets for existing tweets.
+
+        Only updates rows whose engagement counts have actually increased,
+        so the DB always holds the peak observed engagement for each tweet.
+
+        Args:
+            tweets: List of tweet dicts/dataclasses with ``id``, ``likes``,
+                and ``retweets`` fields.  Tweets with no ``id`` are skipped.
+
+        Returns:
+            Number of rows updated (those where at least one counter grew).
+        """
+        if not tweets:
+            return 0
+
+        pairs = [
+            (_get(t, "likes", 0), _get(t, "retweets", 0), _get(t, "id"))
+            for t in tweets
+            if _get(t, "id")
+        ]
+        if not pairs:
+            return 0
+
+        with self._auto_conn() as conn:
+            cursor = conn.executemany(
+                "UPDATE tweets "
+                "SET likes = MAX(likes, ?), retweets = MAX(retweets, ?) "
+                "WHERE id = ?",
+                pairs,
+            )
+            conn.commit()
+            return cursor.rowcount
 
     def create_session(self) -> str:
         session_id = str(uuid.uuid4())
