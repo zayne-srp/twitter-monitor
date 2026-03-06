@@ -307,3 +307,51 @@ class TestDatabaseIndexes:
         plan = " ".join(str(r) for r in rows).lower()
         # SQLite should mention the index in the query plan
         assert "idx_tweets_report" in plan
+
+    # ── get_ai_classification ─────────────────────────────────────────────
+
+    def test_get_ai_classification_empty_ids(self, db):
+        """Empty id list returns empty dict immediately."""
+        assert db.get_ai_classification([]) == {}
+
+    def test_get_ai_classification_unknown_ids(self, db):
+        """IDs not in the DB are absent from the result (not classified yet)."""
+        result = db.get_ai_classification(["nonexistent-id-1", "nonexistent-id-2"])
+        assert result == {}
+
+    def test_get_ai_classification_returns_correct_flags(self, db):
+        """Returns the stored is_ai_related value for each known tweet."""
+        session_id = db.create_session()
+        ai_tweet = {
+            "id": "tweet-ai-1", "text": "AI research", "author": "alice",
+            "url": "https://x.com/alice/status/1", "timestamp": "2024-01-01T00:00:00Z",
+            "likes": 10, "retweets": 2, "feed_type": "for_you",
+        }
+        non_ai_tweet = {
+            "id": "tweet-noai-1", "text": "Good morning world", "author": "bob",
+            "url": "https://x.com/bob/status/2", "timestamp": "2024-01-01T00:01:00Z",
+            "likes": 1, "retweets": 0, "feed_type": "for_you",
+        }
+        db.save_tweets([ai_tweet, non_ai_tweet], session_id)
+        db.mark_ai_related(["tweet-ai-1"])
+
+        result = db.get_ai_classification(["tweet-ai-1", "tweet-noai-1", "unknown-id"])
+
+        # Both known tweets are returned; unknown ID is absent
+        assert "unknown-id" not in result
+        assert result["tweet-ai-1"] == 1
+        assert result["tweet-noai-1"] == 0
+
+    def test_get_ai_classification_partial_known(self, db):
+        """Only IDs present in the DB appear in the result."""
+        session_id = db.create_session()
+        tweet = {
+            "id": "tweet-known", "text": "hello", "author": "user",
+            "url": "https://x.com/user/status/99", "timestamp": "2024-01-01T00:00:00Z",
+            "likes": 0, "retweets": 0, "feed_type": "for_you",
+        }
+        db.save_tweets([tweet], session_id)
+
+        result = db.get_ai_classification(["tweet-known", "tweet-unknown"])
+        assert "tweet-known" in result
+        assert "tweet-unknown" not in result
