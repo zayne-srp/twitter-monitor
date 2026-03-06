@@ -43,38 +43,19 @@ EVAL_JS = """
 })()
 """
 
-THREAD_EVAL_JS = """
-(function() {
-  function parseCount(el) {
-    if (!el) return 0;
-    var text = el.innerText ? el.innerText.trim() : '';
-    if (!text) return 0;
-    if (text.endsWith('K')) return Math.round(parseFloat(text) * 1000);
-    if (text.endsWith('M')) return Math.round(parseFloat(text) * 1000000);
-    return parseInt(text.replace(/,/g, ''), 10) || 0;
-  }
-  var tweets = [];
-  document.querySelectorAll('article[data-testid="tweet"]').forEach(function(article) {
-    var textEl = article.querySelector('[data-testid="tweetText"]');
-    var authorEl = article.querySelector('[data-testid="User-Name"] a span');
-    var timeEl = article.querySelector('time');
-    var linkEl = article.querySelector('a[href*="/status/"]');
-    var likeEl = article.querySelector('[data-testid="like"] [data-testid="app-text-transition-container"]');
-    var retweetEl = article.querySelector('[data-testid="retweet"] [data-testid="app-text-transition-container"]');
-    tweets.push({
-      text: textEl ? textEl.innerText : '',
-      author: authorEl ? authorEl.innerText : '',
-      time: timeEl ? timeEl.getAttribute('datetime') : '',
-      url: linkEl ? 'https://x.com' + linkEl.getAttribute('href') : '',
-      likes: parseCount(likeEl),
-      retweets: parseCount(retweetEl)
-    });
-  });
-  return JSON.stringify(tweets);
-})()
-"""
+# THREAD_EVAL_JS is intentionally identical to EVAL_JS — kept as an alias so
+# callers remain readable and the two can diverge independently if needed.
+THREAD_EVAL_JS = EVAL_JS
 
 SCROLL_JS = "window.scrollBy(0, window.innerHeight * 2); true"
+
+# Browser commands that are safe to retry on transient failure.
+# Destructive / side-effectful commands (e.g. "click") are NOT in this set.
+_RETRYABLE_COMMANDS = frozenset({"navigate", "open", "eval", "screenshot"})
+
+# Default retry policy for _run_browser_command
+_DEFAULT_MAX_RETRIES = 3
+_DEFAULT_RETRY_BASE_DELAY = 1.0  # seconds; doubles each attempt
 
 
 @dataclass(frozen=True)
@@ -91,31 +72,83 @@ class Tweet:
 
 class TwitterCrawler:
     def __init__(self, cdp_port: int = 18800, full_text_mode: bool = True,
-                 full_text_concurrency: int = 3, full_text_max: int = 30):
+                 full_text_concurrency: int = 3, full_text_max: int = 30,
+                 max_retries: int = _DEFAULT_MAX_RETRIES,
+                 retry_base_delay: float = _DEFAULT_RETRY_BASE_DELAY):
         self.cdp_port = cdp_port
         self.full_text_mode = full_text_mode
         self.full_text_concurrency = full_text_concurrency
         self.full_text_max = full_text_max
         self._full_text_count = 0
+        self.max_retries = max_retries
+        self.retry_base_delay = retry_base_delay
 
     def _run_browser_command(self, *args: str) -> str:
+        """Execute an agent-browser CLI command and return its stdout.
+
+        Transient failures (non-zero exit code or TimeoutExpired) are retried
+        up to ``self.max_retries`` times with exponential back-off, but only
+        for commands in ``_RETRYABLE_COMMANDS``.  Non-retryable commands (e.g.
+        interactive clicks) are executed once and raise immediately on failure.
+
+        Args:
+            *args: Positional arguments forwarded to ``agent-browser``.
+
+        Returns:
+            stdout of the successful command invocation.
+
+        Raises:
+            RuntimeError: When the command fails after all retries are
+                exhausted (or immediately for non-retryable commands).
+        """
         cmd = ["agent-browser", "--cdp", str(self.cdp_port), *args]
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"Browser command timed out: {' '.join(cmd)}") from exc
+        verb = args[0] if args else ""
+        retryable = verb in _RETRYABLE_COMMANDS
+        attempts = self.max_retries if retryable else 1
 
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Browser command failed (exit {result.returncode}): {result.stderr}"
-            )
+        last_error: Optional[Exception] = None
+        for attempt in range(1, attempts + 1):
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired as exc:
+                last_error = exc
+                err_msg = f"Browser command timed out: {' '.join(cmd)}"
+                if attempt < attempts:
+                    delay = self.retry_base_delay * (2 ** (attempt - 1))
+                    logger.warning(
+                        "%s (attempt %d/%d), retrying in %.1fs",
+                        err_msg, attempt, attempts, delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(err_msg) from exc
 
-        return result.stdout
+            if result.returncode != 0:
+                err_msg = (
+                    f"Browser command failed (exit {result.returncode}): "
+                    f"{result.stderr}"
+                )
+                last_error = RuntimeError(err_msg)
+                if attempt < attempts:
+                    delay = self.retry_base_delay * (2 ** (attempt - 1))
+                    logger.warning(
+                        "%s (attempt %d/%d), retrying in %.1fs",
+                        err_msg, attempt, attempts, delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(err_msg)
+
+            # Success
+            return result.stdout
+
+        # Should be unreachable, but satisfy the type checker.
+        raise RuntimeError(f"Browser command failed after {attempts} attempts") from last_error
 
     def _is_truncated(self, text: str) -> bool:
         stripped = text.rstrip()
