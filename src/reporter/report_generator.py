@@ -170,7 +170,13 @@ Tweets:
         return "\n".join(lines)
 
     def send_report(self, content: str) -> bool:
-        """Send report via Feishu webhook or print to stdout. Returns True if webhook sent."""
+        """Send report via Feishu webhook (plain text fallback) or print to stdout.
+
+        Prefer :meth:`send_as_card` for rich Feishu card output.
+        This method is kept as a fallback for non-card environments.
+
+        Returns True if webhook sent.
+        """
         webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
         MAX_CHARS = 3800
         if webhook_url and len(content) > MAX_CHARS:
@@ -185,6 +191,62 @@ Tweets:
         else:
             print(content)
             return False
+
+    def send_as_card(
+        self,
+        tweets: List[Dict[str, Any]],
+        session_id: str,
+        generated_at: str,
+        followed=None,  # List[str] | None
+    ) -> bool:
+        """Send report as a Feishu interactive card.
+
+        Uses ``msg_type: "interactive"`` which renders Markdown, supports
+        wide-screen layout, and removes the 3800-char plain-text limit.
+
+        Falls back to :meth:`send_report` (plain text) if the webhook is not
+        configured or the card POST fails.
+
+        Args:
+            tweets: Raw tweet rows to display.
+            session_id: Crawl session identifier for the card header.
+            generated_at: Human-readable timestamp shown in the card.
+            followed: Newly followed account handles (shown in footer).
+
+        Returns:
+            True if the card was sent via webhook, False otherwise.
+        """
+        from src.reporter.feishu_card import build_card, build_empty_card
+
+        webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
+        if not webhook_url:
+            # No webhook — fall back to stdout plain text
+            markdown = self.generate_report(tweets, session_id)
+            print(markdown)
+            return False
+
+        try:
+            if tweets:
+                # Attempt AI topic clustering for richer card sections
+                clustered = self.cluster_topics(tweets[:20])
+                payload = build_card(
+                    tweets,
+                    session_id=session_id,
+                    generated_at=generated_at,
+                    clustered=clustered,
+                    followed=followed,
+                )
+            else:
+                payload = build_empty_card(generated_at)
+
+            resp = requests.post(webhook_url, json=payload)
+            resp.raise_for_status()
+            logger.info("Report sent as Feishu interactive card (%d tweets)", len(tweets))
+            return True
+        except Exception as exc:
+            logger.warning("Feishu card send failed, falling back to plain text: %s", exc)
+            markdown = self.generate_report(tweets, session_id)
+            return self.send_report(markdown)
 
     def save_report(self, content: str, output_dir: str) -> str:
         os.makedirs(output_dir, exist_ok=True)
