@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def embed_text(text: str, client: OpenAI = None) -> List[float]:
-    """Generate embedding for text using OpenAI text-embedding-3-small."""
+    """Generate embedding for a single text using OpenAI text-embedding-3-small."""
     if client is None:
         client = OpenAI()
     response = client.embeddings.create(
@@ -18,6 +18,40 @@ def embed_text(text: str, client: OpenAI = None) -> List[float]:
         input=text[:8000],  # safe limit
     )
     return response.data[0].embedding
+
+
+def embed_texts_batch(texts: List[str], client: OpenAI = None, batch_size: int = 100) -> List[List[float]]:
+    """Generate embeddings for multiple texts in batched API calls.
+
+    Sends texts in batches of `batch_size` (default 100) to the OpenAI
+    embeddings endpoint, returning one embedding vector per input text.
+    Order is preserved.
+
+    Args:
+        texts: List of texts to embed. Each is truncated to 8000 chars.
+        client: OpenAI client (created if not provided).
+        batch_size: Max texts per API request (OpenAI supports up to 2048).
+
+    Returns:
+        List of embedding vectors in the same order as `texts`.
+    """
+    if client is None:
+        client = OpenAI()
+    if not texts:
+        return []
+
+    results: List[List[float]] = []
+    for i in range(0, len(texts), batch_size):
+        batch = [t[:8000] for t in texts[i : i + batch_size]]
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=batch,
+        )
+        # API guarantees order matches input, but sort by index to be safe
+        sorted_data = sorted(response.data, key=lambda e: e.index)
+        results.extend(e.embedding for e in sorted_data)
+
+    return results
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
