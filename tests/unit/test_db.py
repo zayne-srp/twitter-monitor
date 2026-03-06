@@ -420,3 +420,92 @@ class TestBatchMarkDuplicates:
         conn.close()
         assert row[0] == 1
         assert row[1] == "a"
+
+
+class TestEngagementRanking:
+    """get_non_duplicate_ai_tweets must return rows sorted by engagement score."""
+
+    def _make_ai_tweet(self, tweet_id, likes=0, retweets=0, timestamp="2026-03-04T10:00:00Z"):
+        return {
+            "id": tweet_id,
+            "text": "AI tweet content",
+            "author": "user",
+            "url": f"https://twitter.com/user/status/{tweet_id}",
+            "timestamp": timestamp,
+            "likes": likes,
+            "retweets": retweets,
+            "feed_type": "for_you",
+        }
+
+    def test_high_engagement_first(self, db):
+        """Tweet with most retweets+likes should appear first."""
+        session_id = db.create_session()
+        tweets = [
+            self._make_ai_tweet("low", likes=1, retweets=0),   # score=1
+            self._make_ai_tweet("mid", likes=10, retweets=0),  # score=10
+            self._make_ai_tweet("high", likes=5, retweets=10), # score=35
+        ]
+        db.save_tweets(tweets, session_id)
+        db.mark_ai_related(["low", "mid", "high"])
+
+        rows = db.get_non_duplicate_ai_tweets()
+        ids = [r["id"] for r in rows]
+        assert ids[0] == "high", f"expected 'high' first, got {ids}"
+        assert ids[1] == "mid"
+        assert ids[2] == "low"
+
+    def test_retweet_weight_higher_than_like(self, db):
+        """1 retweet (weight 3) beats 2 likes (weight 2)."""
+        session_id = db.create_session()
+        tweets = [
+            self._make_ai_tweet("likes_tweet", likes=2, retweets=0),  # score=2
+            self._make_ai_tweet("rt_tweet", likes=0, retweets=1),     # score=3
+        ]
+        db.save_tweets(tweets, session_id)
+        db.mark_ai_related(["likes_tweet", "rt_tweet"])
+
+        rows = db.get_non_duplicate_ai_tweets()
+        assert rows[0]["id"] == "rt_tweet"
+
+    def test_tie_broken_by_timestamp(self, db):
+        """Equal engagement scores are broken by timestamp descending (newest first)."""
+        session_id = db.create_session()
+        tweets = [
+            self._make_ai_tweet("older", likes=5, retweets=0, timestamp="2026-03-04T08:00:00Z"),
+            self._make_ai_tweet("newer", likes=5, retweets=0, timestamp="2026-03-04T12:00:00Z"),
+        ]
+        db.save_tweets(tweets, session_id)
+        db.mark_ai_related(["older", "newer"])
+
+        rows = db.get_non_duplicate_ai_tweets()
+        assert rows[0]["id"] == "newer"
+
+    def test_duplicates_and_sent_excluded(self, db):
+        """Duplicate or already-sent tweets must not appear."""
+        session_id = db.create_session()
+        tweets = [
+            self._make_ai_tweet("dup", likes=1000, retweets=500),
+            self._make_ai_tweet("sent", likes=999, retweets=499),
+            self._make_ai_tweet("visible", likes=1, retweets=0),
+        ]
+        db.save_tweets(tweets, session_id)
+        db.mark_ai_related(["dup", "sent", "visible"])
+        db.batch_mark_duplicates([("dup", "visible")])
+        db.mark_sent(["sent"])
+
+        rows = db.get_non_duplicate_ai_tweets()
+        ids = [r["id"] for r in rows]
+        assert "dup" not in ids
+        assert "sent" not in ids
+        assert "visible" in ids
+
+    def test_engagement_score_field_present(self, db):
+        """Returned rows include the computed engagement_score field."""
+        session_id = db.create_session()
+        db.save_tweets([self._make_ai_tweet("t1", likes=4, retweets=2)], session_id)
+        db.mark_ai_related(["t1"])
+
+        rows = db.get_non_duplicate_ai_tweets()
+        assert len(rows) == 1
+        # score = retweets*3 + likes = 6 + 4 = 10
+        assert rows[0]["engagement_score"] == 10

@@ -443,12 +443,22 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
             return [dict(row) for row in cursor.fetchall()]
 
     def get_non_duplicate_ai_tweets(self) -> List[dict]:
-        """Return AI-related tweets that are not duplicates and not yet sent."""
+        """Return AI-related tweets that are not duplicates and not yet sent.
+
+        Rows are ordered by a composite engagement score so the most viral /
+        impactful tweets appear first in the daily report:
+
+            score = retweets * 3 + likes
+
+        Ties are broken by timestamp descending (newest first), then by
+        id for a fully deterministic result.
+        """
         with self._auto_conn() as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
-                "SELECT * FROM tweets "
+                "SELECT *, (COALESCE(retweets, 0) * 3 + COALESCE(likes, 0)) AS engagement_score "
+                "FROM tweets "
                 "WHERE is_ai_related = 1 AND is_duplicate = 0 AND sent = 0 "
-                "ORDER BY id",
+                "ORDER BY engagement_score DESC, timestamp DESC, id",
             )
             return [dict(row) for row in cursor.fetchall()]
