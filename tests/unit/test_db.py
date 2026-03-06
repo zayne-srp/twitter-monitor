@@ -355,3 +355,68 @@ class TestDatabaseIndexes:
         result = db.get_ai_classification(["tweet-known", "tweet-unknown"])
         assert "tweet-known" in result
         assert "tweet-unknown" not in result
+
+
+class TestBatchMarkDuplicates:
+    """Tests for the batch_mark_duplicates method."""
+
+    def _make_tweet(self, tweet_id: str, text: str = "some text") -> dict:
+        return {
+            "id": tweet_id,
+            "text": text,
+            "author": "user",
+            "url": f"https://x.com/user/status/{tweet_id}",
+            "timestamp": "2024-01-01T00:00:00Z",
+            "likes": 0,
+            "retweets": 0,
+            "feed_type": "for_you",
+        }
+
+    def test_batch_mark_duplicates_empty(self, db):
+        """Empty pairs list returns 0 and is a no-op."""
+        assert db.batch_mark_duplicates([]) == 0
+
+    def test_batch_mark_duplicates_single(self, db):
+        """Single pair marks exactly one tweet as duplicate."""
+        session_id = db.create_session()
+        db.save_tweets([self._make_tweet("orig"), self._make_tweet("dup1")], session_id)
+        count = db.batch_mark_duplicates([("dup1", "orig")])
+        assert count == 1
+        import sqlite3
+        conn = sqlite3.connect(db.db_path)
+        row = conn.execute(
+            "SELECT is_duplicate, duplicate_of FROM tweets WHERE id = 'dup1'"
+        ).fetchone()
+        conn.close()
+        assert row[0] == 1
+        assert row[1] == "orig"
+
+    def test_batch_mark_duplicates_multiple(self, db):
+        """Multiple pairs are all applied in one transaction."""
+        session_id = db.create_session()
+        tweets = [self._make_tweet(tid) for tid in ["orig", "dup1", "dup2", "dup3"]]
+        db.save_tweets(tweets, session_id)
+        pairs = [("dup1", "orig"), ("dup2", "orig"), ("dup3", "orig")]
+        count = db.batch_mark_duplicates(pairs)
+        assert count == 3
+        import sqlite3
+        conn = sqlite3.connect(db.db_path)
+        rows = conn.execute(
+            "SELECT id, is_duplicate FROM tweets WHERE id IN ('dup1','dup2','dup3')"
+        ).fetchall()
+        conn.close()
+        assert all(r[1] == 1 for r in rows)
+
+    def test_mark_duplicate_single_delegates_to_batch(self, db):
+        """mark_duplicate (legacy) still works via batch_mark_duplicates."""
+        session_id = db.create_session()
+        db.save_tweets([self._make_tweet("a"), self._make_tweet("b")], session_id)
+        db.mark_duplicate("b", "a")
+        import sqlite3
+        conn = sqlite3.connect(db.db_path)
+        row = conn.execute(
+            "SELECT is_duplicate, duplicate_of FROM tweets WHERE id = 'b'"
+        ).fetchone()
+        conn.close()
+        assert row[0] == 1
+        assert row[1] == "a"
