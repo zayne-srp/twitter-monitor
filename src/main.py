@@ -119,9 +119,8 @@ def run_crawl(limit: int) -> tuple[str, list[str]]:
         new_tweets = db.get_tweets_by_session(session_id)
         existing_tweets = db.get_tweets_with_embeddings_recent(hours=48)
         dedup_ids = deduplicator.deduplicate(new_tweets, existing_tweets)
-        for tweet_id, dup_of in dedup_ids:
-            db.mark_duplicate(tweet_id, dup_of)
-        logger.info("Marked %d tweets as semantic duplicates", len(dedup_ids))
+        marked = db.batch_mark_duplicates(dedup_ids)
+        logger.info("Marked %d tweets as semantic duplicates", marked)
     except Exception as e:
         logger.warning("Semantic dedup failed (non-fatal): %s", e)
 

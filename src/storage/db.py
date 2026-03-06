@@ -395,13 +395,28 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
 
     def mark_duplicate(self, tweet_id: str, duplicate_of: str) -> None:
         """Mark a tweet as a semantic duplicate of another tweet."""
+        self.batch_mark_duplicates([(tweet_id, duplicate_of)])
+
+    def batch_mark_duplicates(self, pairs: List[tuple]) -> int:
+        """Mark multiple tweets as semantic duplicates in a single transaction.
+
+        Args:
+            pairs: Iterable of (tweet_id, duplicate_of) tuples.
+
+        Returns:
+            Number of rows updated.
+        """
+        pairs = list(pairs)
+        if not pairs:
+            return 0
         conn = sqlite3.connect(self.db_path)
         try:
-            conn.execute(
+            cursor = conn.executemany(
                 "UPDATE tweets SET is_duplicate = 1, duplicate_of = ? WHERE id = ?",
-                (duplicate_of, tweet_id),
+                [(dup_of, tid) for tid, dup_of in pairs],
             )
             conn.commit()
+            return cursor.rowcount
         finally:
             conn.close()
 
