@@ -80,11 +80,11 @@ def run_crawl(limit: int) -> tuple[str, list[str]]:
     except Exception as e:
         logger.warning("Auto-follow step failed (non-fatal): %s", e)
 
-    # Index embeddings for new tweets
+    # Index embeddings for AI-related tweets only (saves API cost vs indexing all)
     try:
         from src.search.tweet_indexer import TweetIndexer
         indexer = TweetIndexer(db)
-        indexer.index_tweets(all_tweets)
+        indexer.index_tweets(ai_tweets)
     except Exception as e:
         logger.warning("Tweet indexing step failed (non-fatal): %s", e)
 
