@@ -65,8 +65,30 @@ def run_crawl(limit: int) -> tuple[str, list[str]]:
     saved_count = db.save_tweets(all_tweets, session_id)
     logger.info("Saved %d new tweets (deduped)", saved_count)
 
-    ai_tweets = ai_filter.filter_tweets(all_tweets)
-    logger.info("Filtered to %d AI-related tweets", len(ai_tweets))
+    # ── Optimised AI filtering ──────────────────────────────────────────
+    # Look up which crawled tweets already have a classification stored in
+    # the DB so we don't make redundant OpenAI API calls for them.
+    all_ids = [t["id"] for t in all_tweets if t.get("id")]
+    known_classification = db.get_ai_classification(all_ids)
+
+    new_tweets = [t for t in all_tweets if t.get("id") and t["id"] not in known_classification]
+    already_ai_ids = {tid for tid, val in known_classification.items() if val}
+
+    freshly_ai = ai_filter.filter_tweets(new_tweets)
+    freshly_ai_ids = {t["id"] for t in freshly_ai}
+
+    # Combine: freshly classified + already-known AI tweets still in this crawl
+    ai_tweet_id_set = freshly_ai_ids | already_ai_ids
+    ai_tweets = [t for t in all_tweets if t.get("id") in ai_tweet_id_set]
+
+    skipped = len(all_tweets) - len(new_tweets)
+    logger.info(
+        "AI filter: %d new tweets classified, %d already known (skipped), "
+        "%d total AI-related",
+        len(new_tweets),
+        skipped,
+        len(ai_tweets),
+    )
 
     ai_ids = [t["id"] for t in ai_tweets]
     db.mark_ai_related(ai_ids)

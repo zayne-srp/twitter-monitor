@@ -279,6 +279,33 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
         finally:
             conn.close()
 
+
+    def get_ai_classification(self, ids: list) -> dict:
+        """Return {tweet_id: is_ai_related} for the given ids that already exist in the DB.
+
+        Only tweets already classified (i.e. present in the DB) are returned.
+        Tweets not found are absent from the result dict — callers should treat
+        them as needing classification.
+
+        Args:
+            ids: Tweet ID strings to look up.
+
+        Returns:
+            Mapping of tweet_id -> is_ai_related (0 or 1) for known tweets.
+        """
+        if not ids:
+            return {}
+        conn = sqlite3.connect(self.db_path)
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            cursor = conn.execute(
+                f"SELECT id, is_ai_related FROM tweets WHERE id IN ({placeholders})",
+                ids,
+            )
+            return {row[0]: row[1] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
     def get_last_crawl_start(self) -> Optional[str]:
         """Return the earliest tweet timestamp from the most recent completed crawl session."""
         conn = sqlite3.connect(self.db_path)
