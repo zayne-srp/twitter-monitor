@@ -13,37 +13,65 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 EVAL_JS = """
-const tweets = [];
-document.querySelectorAll('article[data-testid="tweet"]').forEach(article => {
-  const textEl = article.querySelector('[data-testid="tweetText"]');
-  const authorEl = article.querySelector('[data-testid="User-Name"] a span');
-  const timeEl = article.querySelector('time');
-  const linkEl = article.querySelector('a[href*="/status/"]');
-  tweets.push({
-    text: textEl ? textEl.innerText : '',
-    author: authorEl ? authorEl.innerText : '',
-    time: timeEl ? timeEl.getAttribute('datetime') : '',
-    url: linkEl ? 'https://x.com' + linkEl.getAttribute('href') : ''
+(function() {
+  function parseCount(el) {
+    if (!el) return 0;
+    var text = el.innerText ? el.innerText.trim() : '';
+    if (!text) return 0;
+    if (text.endsWith('K')) return Math.round(parseFloat(text) * 1000);
+    if (text.endsWith('M')) return Math.round(parseFloat(text) * 1000000);
+    return parseInt(text.replace(/,/g, ''), 10) || 0;
+  }
+  var tweets = [];
+  document.querySelectorAll('article[data-testid="tweet"]').forEach(function(article) {
+    var textEl = article.querySelector('[data-testid="tweetText"]');
+    var authorEl = article.querySelector('[data-testid="User-Name"] a span');
+    var timeEl = article.querySelector('time');
+    var linkEl = article.querySelector('a[href*="/status/"]');
+    var likeEl = article.querySelector('[data-testid="like"] [data-testid="app-text-transition-container"]');
+    var retweetEl = article.querySelector('[data-testid="retweet"] [data-testid="app-text-transition-container"]');
+    tweets.push({
+      text: textEl ? textEl.innerText : '',
+      author: authorEl ? authorEl.innerText : '',
+      time: timeEl ? timeEl.getAttribute('datetime') : '',
+      url: linkEl ? 'https://x.com' + linkEl.getAttribute('href') : '',
+      likes: parseCount(likeEl),
+      retweets: parseCount(retweetEl)
+    });
   });
-});
-JSON.stringify(tweets)
+  return JSON.stringify(tweets);
+})()
 """
 
 THREAD_EVAL_JS = """
-const tweets = [];
-document.querySelectorAll('article[data-testid="tweet"]').forEach(article => {
-  const textEl = article.querySelector('[data-testid="tweetText"]');
-  const authorEl = article.querySelector('[data-testid="User-Name"] a span');
-  const timeEl = article.querySelector('time');
-  const linkEl = article.querySelector('a[href*="/status/"]');
-  tweets.push({
-    text: textEl ? textEl.innerText : '',
-    author: authorEl ? authorEl.innerText : '',
-    time: timeEl ? timeEl.getAttribute('datetime') : '',
-    url: linkEl ? 'https://x.com' + linkEl.getAttribute('href') : ''
+(function() {
+  function parseCount(el) {
+    if (!el) return 0;
+    var text = el.innerText ? el.innerText.trim() : '';
+    if (!text) return 0;
+    if (text.endsWith('K')) return Math.round(parseFloat(text) * 1000);
+    if (text.endsWith('M')) return Math.round(parseFloat(text) * 1000000);
+    return parseInt(text.replace(/,/g, ''), 10) || 0;
+  }
+  var tweets = [];
+  document.querySelectorAll('article[data-testid="tweet"]').forEach(function(article) {
+    var textEl = article.querySelector('[data-testid="tweetText"]');
+    var authorEl = article.querySelector('[data-testid="User-Name"] a span');
+    var timeEl = article.querySelector('time');
+    var linkEl = article.querySelector('a[href*="/status/"]');
+    var likeEl = article.querySelector('[data-testid="like"] [data-testid="app-text-transition-container"]');
+    var retweetEl = article.querySelector('[data-testid="retweet"] [data-testid="app-text-transition-container"]');
+    tweets.push({
+      text: textEl ? textEl.innerText : '',
+      author: authorEl ? authorEl.innerText : '',
+      time: timeEl ? timeEl.getAttribute('datetime') : '',
+      url: linkEl ? 'https://x.com' + linkEl.getAttribute('href') : '',
+      likes: parseCount(likeEl),
+      retweets: parseCount(retweetEl)
+    });
   });
-});
-JSON.stringify(tweets)
+  return JSON.stringify(tweets);
+})()
 """
 
 SCROLL_JS = "window.scrollBy(0, window.innerHeight * 2); true"
@@ -277,8 +305,8 @@ JSON.stringify(el ? el.innerText : '')
                 "author": item.get("author", ""),
                 "url": url,
                 "timestamp": item.get("time", ""),
-                "likes": 0,
-                "retweets": 0,
+                "likes": item.get("likes", 0),
+                "retweets": item.get("retweets", 0),
                 "feed_type": feed_type,
             })
 
