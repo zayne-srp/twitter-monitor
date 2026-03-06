@@ -263,3 +263,47 @@ class TestSaveTweetsBatchBehavior:
         mixed = [_make_tweet(str(i)) for i in range(3, 10)]
         count = db.save_tweets(mixed, session_id)
         assert count == 5  # only 5-9 are new
+
+
+class TestDatabaseIndexes:
+    """Verify that the expected performance indexes are created on init."""
+
+    def test_indexes_created_on_new_db(self, db):
+        """All four performance indexes should exist after init."""
+        conn = sqlite3.connect(db.db_path)
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='tweets'"
+        )
+        index_names = {row[0] for row in cursor.fetchall()}
+        conn.close()
+
+        assert "idx_tweets_report" in index_names
+        assert "idx_tweets_embedding" in index_names
+        assert "idx_tweets_created_at" in index_names
+        assert "idx_tweets_session" in index_names
+
+    def test_indexes_idempotent_on_existing_db(self, db):
+        """Re-initialising the DB should not raise even when indexes already exist."""
+        # Trigger _init_db a second time via a new TweetDatabase pointing to
+        # the same file — should not raise any SQLite errors.
+        db2 = TweetDatabase(db.db_path)
+        conn = sqlite3.connect(db2.db_path)
+        cursor = conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='index' AND tbl_name='tweets'"
+        )
+        count = cursor.fetchone()[0]
+        conn.close()
+        assert count >= 4  # at minimum our 4 indexes
+
+    def test_report_index_accelerates_query(self, db):
+        """EXPLAIN QUERY PLAN should use idx_tweets_report for the report query."""
+        conn = sqlite3.connect(db.db_path)
+        rows = conn.execute(
+            "EXPLAIN QUERY PLAN "
+            "SELECT * FROM tweets "
+            "WHERE is_ai_related = 1 AND is_duplicate = 0 AND sent = 0"
+        ).fetchall()
+        conn.close()
+        plan = " ".join(str(r) for r in rows).lower()
+        # SQLite should mention the index in the query plan
+        assert "idx_tweets_report" in plan

@@ -39,6 +39,19 @@ _INSERT_TWEET_SQL = (
     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
+# Indexes that speed up the most common query patterns.
+# All use CREATE INDEX IF NOT EXISTS so they are safe to apply on existing DBs.
+_CREATE_INDEXES = [
+    # Report generation: WHERE is_ai_related=1 AND is_duplicate=0 AND sent=0
+    "CREATE INDEX IF NOT EXISTS idx_tweets_report ON tweets (is_ai_related, is_duplicate, sent)",
+    # Embedding queries: WHERE embedding IS NOT NULL / IS NULL AND is_ai_related=1
+    "CREATE INDEX IF NOT EXISTS idx_tweets_embedding ON tweets (is_ai_related, embedding)",
+    # Time-range queries: WHERE created_at >= ...
+    "CREATE INDEX IF NOT EXISTS idx_tweets_created_at ON tweets (created_at)",
+    # Session lookup: WHERE crawl_session_id = ?
+    "CREATE INDEX IF NOT EXISTS idx_tweets_session ON tweets (crawl_session_id)",
+]
+
 
 def _get(obj, key, default=None):
     """Get field from either a dict or a dataclass."""
@@ -82,9 +95,16 @@ CREATE TABLE IF NOT EXISTS followed_accounts (
 """)
             self._migrate_columns(conn)
             self._migrate_followed_accounts(conn)
+            self._ensure_indexes(conn)
             conn.commit()
         finally:
             conn.close()
+
+    def _ensure_indexes(self, conn: sqlite3.Connection) -> None:
+        """Create performance indexes idempotently (IF NOT EXISTS)."""
+        for ddl in _CREATE_INDEXES:
+            conn.execute(ddl)
+        logger.debug("DB indexes ensured (%d indexes)", len(_CREATE_INDEXES))
 
     def _migrate_columns(self, conn: sqlite3.Connection) -> None:
         cursor = conn.execute("PRAGMA table_info(tweets)")
