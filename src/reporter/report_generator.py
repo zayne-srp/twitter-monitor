@@ -2,11 +2,11 @@ import json as _json
 import logging
 import os
 from collections import defaultdict
-from typing import List
+from typing import Dict, List, Optional
 
 import requests
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,6 @@ _CATEGORY_KEYWORDS = {
 }
 
 
-
 def _get(obj, key, default=''):
     return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
 
@@ -45,8 +44,15 @@ class ReportGenerator:
                 return category
         return "Opinion & Discussion"
 
-    def cluster_topics(self, tweets):
-        """Use OpenAI to cluster tweets into up to 5 topics. Returns {topic: [tweets]} or None on failure."""
+    def cluster_topics(self, tweets) -> Optional[Dict[str, list]]:
+        """Use OpenAI to cluster tweets into up to 5 topics.
+
+        Returns {topic: [tweets]} or None on failure.
+
+        Note: This method makes one OpenAI API call.  Call it *once* per
+        pipeline run and pass the result to both :meth:`generate_report` and
+        :meth:`send_as_card` to avoid redundant API calls.
+        """
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
             return None
@@ -83,7 +89,23 @@ Tweets:
             logger.warning("Topic clustering failed: %s", e)
             return None
 
-    def generate_report(self, tweets: List[Dict[str, Any]], session_id: str) -> str:
+    def generate_report(
+        self,
+        tweets: List[Dict[str, Any]],
+        session_id: str,
+        *,
+        clustered: Optional[Dict[str, list]] = None,
+    ) -> str:
+        """Generate a Markdown report.
+
+        Args:
+            tweets: AI-related tweet rows to include in the report.
+            session_id: Crawl session identifier shown in the header.
+            clustered: Pre-computed topic clusters from :meth:`cluster_topics`.
+                If provided, the method skips its own clustering API call.
+                Pass ``None`` to let the method call OpenAI itself (legacy
+                behaviour, triggers an extra API call).
+        """
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         lines = [
             f"# Twitter AI Monitor Report",
@@ -118,7 +140,10 @@ Tweets:
         display_tweets = [t for t, _ in aggregated]
         extra_map = {_get(t, 'author', ''): e for t, e in aggregated}
 
-        clustered = self.cluster_topics(display_tweets)
+        # Use pre-computed clusters when available to avoid a redundant API call.
+        if clustered is None:
+            clustered = self.cluster_topics(display_tweets)
+
         if clustered:
             for topic_name, topic_tweets in clustered.items():
                 lines.append(f"## {topic_name} ({len(topic_tweets)})")
@@ -198,6 +223,8 @@ Tweets:
         session_id: str,
         generated_at: str,
         followed=None,  # List[str] | None
+        *,
+        clustered: Optional[Dict[str, list]] = None,
     ) -> bool:
         """Send report as a Feishu interactive card.
 
@@ -212,6 +239,9 @@ Tweets:
             session_id: Crawl session identifier for the card header.
             generated_at: Human-readable timestamp shown in the card.
             followed: Newly followed account handles (shown in footer).
+            clustered: Pre-computed topic clusters from :meth:`cluster_topics`.
+                When provided the method skips its own clustering API call,
+                halving the total number of OpenAI requests per pipeline run.
 
         Returns:
             True if the card was sent via webhook, False otherwise.
@@ -221,14 +251,16 @@ Tweets:
         webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
         if not webhook_url:
             # No webhook — fall back to stdout plain text
-            markdown = self.generate_report(tweets, session_id)
+            markdown = self.generate_report(tweets, session_id, clustered=clustered)
             print(markdown)
             return False
 
         try:
             if tweets:
-                # Attempt AI topic clustering for richer card sections
-                clustered = self.cluster_topics(tweets[:20])
+                # Use pre-computed clusters when available to avoid a redundant
+                # API call (the caller already invoked cluster_topics once).
+                if clustered is None:
+                    clustered = self.cluster_topics(tweets[:20])
                 payload = build_card(
                     tweets,
                     session_id=session_id,
@@ -245,7 +277,7 @@ Tweets:
             return True
         except Exception as exc:
             logger.warning("Feishu card send failed, falling back to plain text: %s", exc)
-            markdown = self.generate_report(tweets, session_id)
+            markdown = self.generate_report(tweets, session_id, clustered=clustered)
             return self.send_report(markdown)
 
     def save_report(self, content: str, output_dir: str) -> str:

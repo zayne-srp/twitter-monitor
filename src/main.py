@@ -123,8 +123,13 @@ def run_send(output_dir: str, followed: list[str] | None = None) -> str | None:
 
     rows = db.get_non_duplicate_ai_tweets()
 
+    # Compute topic clusters once and share with both generate_report and
+    # send_as_card to avoid making two identical OpenAI API calls per run.
+    display_rows = (rows or [])[:20]
+    clustered = reporter.cluster_topics(display_rows) if display_rows else None
+
     # Always generate and save the markdown report as an artifact
-    report_content = reporter.generate_report(rows or [], "send")
+    report_content = reporter.generate_report(rows or [], "send", clustered=clustered)
     if followed:
         report_content += f"\n\n🤝 本次新关注：{', '.join('@' + h for h in followed)}"
 
@@ -144,6 +149,7 @@ def run_send(output_dir: str, followed: list[str] | None = None) -> str | None:
         session_id="send",
         generated_at=generated_at,
         followed=followed,
+        clustered=clustered,
     )
     if sent_via_webhook:
         logger.info("Report sent as Feishu interactive card")
