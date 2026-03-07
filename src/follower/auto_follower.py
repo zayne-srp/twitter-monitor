@@ -4,7 +4,7 @@ import re
 import logging
 import subprocess
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Set
 
 from openai import OpenAI
 
@@ -122,34 +122,80 @@ Include the @ prefix in keys."""
             logger.error("Failed to follow @%s: %s", handle, e)
             return False
 
+    @staticmethod
+    def _extract_handle(tweet: dict) -> str:
+        """Return the Twitter handle for a tweet, extracted from URL or author field."""
+        url = tweet.get("url", "")
+        m = re.search(r"(?:x|twitter)\.com/([^/]+)/status/", url)
+        if m:
+            return m.group(1)
+        return tweet.get("author", "").strip().lstrip("@")
+
     def run(self, ai_tweets: List[dict], db) -> List[str]:
-        """Evaluate authors and follow high-quality ones not yet followed. Returns newly followed handles."""
+        """Evaluate authors and follow high-quality ones not yet followed.
+
+        The already-followed accounts are fetched from the DB *before* calling
+        OpenAI so that tweets from already-followed authors are excluded from
+        the scoring payload.  This avoids paying for API tokens on authors we
+        will unconditionally skip, and also keeps the prompt shorter (faster
+        and cheaper).
+
+        Returns:
+            List of newly followed handles (without '@').
+        """
         newly_followed: List[str] = []
         if not ai_tweets:
             logger.info("No AI tweets to evaluate for auto-follow")
             return newly_followed
 
-        logger.info("Evaluating %d AI tweets for auto-follow", len(ai_tweets))
-        scores = self.evaluate_authors(ai_tweets)
-        if not scores:
-            logger.warning("No author scores returned")
-            return newly_followed
-
-        logger.info("Author scores: %s", scores)
-        already_followed = db.get_followed_accounts()
+        # ── Pre-fetch followed accounts before scoring ───────────────────
+        # Fetching *before* evaluate_authors lets us exclude already-followed
+        # authors from the OpenAI prompt entirely, saving tokens and latency.
+        already_followed: Set[str] = db.get_followed_accounts()
 
         # Build author -> handle mapping from tweet URLs
         author_to_handle: Dict[str, str] = {}
         for tweet in ai_tweets:
             author = tweet.get("author", "").strip()
-            url = tweet.get("url", "")
-            m = re.search(r"x\.com/([^/]+)/status/", url) or re.search(r"twitter\.com/([^/]+)/status/", url)
-            if m and author:
-                author_to_handle[author] = m.group(1)
+            if author:
+                author_to_handle[author] = self._extract_handle(tweet)
+
+        # Filter tweets to only those whose author is not yet followed
+        new_author_tweets = [
+            t for t in ai_tweets
+            if author_to_handle.get(t.get("author", "").strip(), "") not in already_followed
+        ]
+
+        skipped_count = len(ai_tweets) - len(new_author_tweets)
+        if skipped_count:
+            logger.info(
+                "Auto-follow: skipping %d tweets from %d already-followed author(s) "
+                "before OpenAI scoring",
+                skipped_count,
+                len({author_to_handle.get(t.get("author", "").strip(), "") for t in ai_tweets} & already_followed),
+            )
+
+        if not new_author_tweets:
+            logger.info("All AI tweet authors already followed; skipping OpenAI scoring")
+            return newly_followed
+
+        logger.info(
+            "Evaluating %d AI tweets (%d unique new authors) for auto-follow",
+            len(new_author_tweets),
+            len({t.get("author", "") for t in new_author_tweets}),
+        )
+        scores = self.evaluate_authors(new_author_tweets)
+        if not scores:
+            logger.warning("No author scores returned")
+            return newly_followed
+
+        logger.info("Author scores: %s", scores)
 
         for author, score in scores.items():
             handle = author_to_handle.get(author, author)
             if score >= 7.0:
+                # already_followed guard kept as a safety net in case the DB
+                # was updated concurrently between our pre-fetch and now.
                 if handle in already_followed:
                     logger.info("@%s already followed (score=%.1f)", handle, score)
                     continue
