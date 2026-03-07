@@ -275,7 +275,7 @@ JSON.stringify(el ? el.innerText : '')
                         stop_reason = "max_tweets"
                         break
 
-                    if last_crawl_start and tweet.get("timestamp"):
+                    if last_crawl_start and tweet.get("timestamp") and feed_type == "following":
                         if tweet["timestamp"] < last_crawl_start:
                             stop_reason = "timestamp"
                             break
