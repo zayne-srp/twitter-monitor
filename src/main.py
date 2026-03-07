@@ -62,14 +62,16 @@ def run_crawl(limit: int) -> tuple[str, list[str]]:
 
     logger.info("Crawled %d total tweets", len(all_tweets))
 
-    saved_count = db.save_tweets(all_tweets, session_id)
-    logger.info("Saved %d new tweets (deduped)", saved_count)
-
     # ── Optimised AI filtering ──────────────────────────────────────────
     # Look up which crawled tweets already have a classification stored in
     # the DB so we don't make redundant OpenAI API calls for them.
+    # NOTE: This must happen BEFORE save_tweets, which sets is_ai_related=0
+    # on all new rows and would cause every tweet to appear "already known".
     all_ids = [t["id"] for t in all_tweets if t.get("id")]
     known_classification = db.get_ai_classification(all_ids)
+
+    saved_count = db.save_tweets(all_tweets, session_id)
+    logger.info("Saved %d new tweets (deduped)", saved_count)
 
     new_tweets = [t for t in all_tweets if t.get("id") and t["id"] not in known_classification]
     already_ai_ids = {tid for tid, val in known_classification.items() if val}
