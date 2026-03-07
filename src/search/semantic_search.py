@@ -96,20 +96,21 @@ def cosine_similarities_matrix(query: List[float], corpus: List[List[float]]) ->
         return []
 
     q = np.array(query, dtype=np.float32)
+
+    # Zero query vector → all similarities are 0
+    q_norm = np.linalg.norm(q)
+    if q_norm == 0:
+        return [0.0] * len(corpus)
+
     C = np.array(corpus, dtype=np.float32)  # (N, D)
 
     # Dot products: (N,)
     dots = C @ q
 
-    # Norms
-    q_norm = np.linalg.norm(q)
-    c_norms = np.linalg.norm(C, axis=1)
+    # Norms – use np.maximum so the denominator is never zero
+    c_norms = np.maximum(np.linalg.norm(C, axis=1), 1e-10)
 
-    # Guard against zero-norm vectors
-    denom = c_norms * q_norm
-    denom = np.where(denom == 0, 1e-10, denom)
-
-    return (dots / denom).tolist()
+    return (dots / (c_norms * q_norm)).tolist()
 
 
 class SemanticSearch:
