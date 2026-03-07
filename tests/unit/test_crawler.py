@@ -199,8 +199,8 @@ class TestGetFeeds:
 
     @patch("time.sleep")
     @patch.object(TwitterCrawler, "_run_browser_command")
-    def test_timestamp_early_stop(self, mock_cmd, mock_sleep):
-        """Stops when tweet timestamp is older than last crawl start."""
+    def test_following_timestamp_early_stop(self, mock_cmd, mock_sleep):
+        """Following feed stops when tweet timestamp is older than last crawl start."""
         mock_db = MagicMock()
         mock_db.get_all_tweet_ids.return_value = set()
         mock_db.get_last_crawl_start.return_value = "2026-03-04T12:00:00Z"
@@ -222,9 +222,50 @@ class TestGetFeeds:
         eval_result = json.dumps(tweets_data)
         mock_cmd.side_effect = ["ok", "5", eval_result]
         crawler = TwitterCrawler()
-        tweets = crawler.get_for_you_feed(limit=50, db=mock_db)
+        tweets = crawler.get_following_feed(limit=50, db=mock_db)
         # Stops at tweet 2 due to timestamp, both tweets are collected
         assert len(tweets) == 2
+
+    @patch("time.sleep")
+    @patch.object(TwitterCrawler, "_run_browser_command")
+    def test_for_you_no_timestamp_stop(self, mock_cmd, mock_sleep):
+        """For-you feed does NOT stop early on old timestamps."""
+        mock_db = MagicMock()
+        mock_db.get_all_tweet_ids.return_value = set()
+        mock_db.get_last_crawl_start.return_value = "2026-03-04T12:00:00Z"
+
+        tweets_data = [
+            {
+                "text": "New tweet",
+                "author": "user_a",
+                "time": "2026-03-04T13:00:00Z",
+                "url": "https://x.com/user_a/status/300",
+            },
+            {
+                "text": "Old tweet",
+                "author": "user_b",
+                "time": "2026-03-04T11:00:00Z",  # Before last_crawl_start
+                "url": "https://x.com/user_b/status/301",
+            },
+            {
+                "text": "Another tweet",
+                "author": "user_c",
+                "time": "2026-03-04T14:00:00Z",
+                "url": "https://x.com/user_c/status/302",
+            },
+        ]
+        eval_result = json.dumps(tweets_data)
+        empty_batch = json.dumps([])
+        mock_cmd.side_effect = [
+            "ok", "5", eval_result,       # round 1: navigate, count, eval
+            "ok", empty_batch,             # round 2: scroll, eval (no new tweets)
+            "ok", empty_batch,             # round 3: scroll, eval
+            "ok", empty_batch,             # round 4: scroll, eval → no_new_content stop
+        ]
+        crawler = TwitterCrawler()
+        tweets = crawler.get_for_you_feed(limit=50, db=mock_db)
+        # All 3 tweets collected — for_you feed ignores timestamp early-stop
+        assert len(tweets) == 3
 
 
 class TestParseTweetsFromEval:
