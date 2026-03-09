@@ -8,9 +8,7 @@ build/
 *.egg
 
 # Virtual environment
-venv/
-.venv/
-env/
+.conda/
 
 # Environment variables
 .env
@@ -27,6 +25,7 @@ logs/*.log
 # Database
 *.db
 *.sqlite3
+data/
 
 # Reports (generated)
 reports/*.md
@@ -42,3 +41,4 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+venv/
