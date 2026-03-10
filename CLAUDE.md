@@ -13,7 +13,7 @@ filters AI-related tweets, and sends reports to Feishu.
 
 ## Key Constraints
 - Use agent-browser --cdp 18800 for browser operations (NO Playwright/Selenium)
-- Use project venv: venv/
+- Use project venv: .venv/
 - Config via .env file (never hardcode credentials)
 - Logs go to logs/ directory
 

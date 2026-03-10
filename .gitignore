@@ -8,6 +8,8 @@ build/
 *.egg
 
 # Virtual environment
+.venv/
+venv/
 .conda/
 
 # Environment variables

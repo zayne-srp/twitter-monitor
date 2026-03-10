@@ -25,23 +25,17 @@ Automated Twitter AI content crawler that monitors AI-related tweets from your t
 git clone <repo-url>
 cd twitter-monitor
 
-# Activate conda environment
-conda activate twitter-monitor
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
-# Install dependencies (only needed first time)
+# Install dependencies
 pip install -r requirements.txt
 
 # Configure environment
 cp .env.example .env
 # Edit .env with your settings (no Twitter credentials needed — uses openclaw browser session)
 ```
-
-> **环境管理**：本项目使用 Conda 环境（`twitter-monitor`，基于 Python 3.11）。
-> 初始化环境（首次克隆时）：
-> ```bash
-> conda create --name twitter-monitor --clone base-py -y
-> pip install -r requirements.txt
-> ```
 
 ## Configuration
 
@@ -63,7 +57,7 @@ Edit `.env` with your settings:
 ./run_crawler.sh
 
 # Or run specific modes
-conda activate twitter-monitor
+source .venv/bin/activate
 python -m src.main --mode crawl          # Crawl only
 python -m src.main --mode report         # Report only
 python -m src.main --mode all            # Full pipeline
@@ -107,7 +101,7 @@ twitter-monitor/
 ## Running Tests
 
 ```bash
-conda activate twitter-monitor
+source .venv/bin/activate
 pip install pytest
 
 # Unit tests
