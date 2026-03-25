@@ -51,7 +51,7 @@ SCROLL_JS = "window.scrollBy(0, window.innerHeight * 2); true"
 
 # Browser commands that are safe to retry on transient failure.
 # Destructive / side-effectful commands (e.g. "click") are NOT in this set.
-_RETRYABLE_COMMANDS = frozenset({"navigate", "open", "eval", "screenshot"})
+_RETRYABLE_COMMANDS = frozenset({"navigate", "open", "eval", "screenshot", "tab"})
 
 # Default retry policy for _run_browser_command
 _DEFAULT_MAX_RETRIES = 3
@@ -82,6 +82,7 @@ class TwitterCrawler:
         self._full_text_count = 0
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
+        self._managed_tab_count = 0
 
     def _run_browser_command(self, *args: str) -> str:
         """Execute an agent-browser CLI command and return its stdout.
@@ -150,6 +151,36 @@ class TwitterCrawler:
         # Should be unreachable, but satisfy the type checker.
         raise RuntimeError(f"Browser command failed after {attempts} attempts") from last_error
 
+    # ── Tab management ────────────────────────────────────────────────
+    def _open_managed_tab(self, url: str = "") -> None:
+        """Open a new browser tab, optionally navigating to *url*."""
+        if url:
+            self._run_browser_command("tab", "new", url)
+        else:
+            self._run_browser_command("tab", "new")
+        self._managed_tab_count += 1
+        logger.debug("Opened managed tab (%d total), url=%s", self._managed_tab_count, url)
+
+    def _close_managed_tab(self) -> None:
+        """Close the current (managed) tab."""
+        if self._managed_tab_count <= 0:
+            return
+        try:
+            self._run_browser_command("tab", "close")
+        except Exception as exc:
+            logger.warning("Failed to close managed tab: %s", exc)
+        self._managed_tab_count -= 1
+
+    def close_all_managed_tabs(self) -> None:
+        """Safety-net: close every tab this crawler opened."""
+        while self._managed_tab_count > 0:
+            try:
+                self._run_browser_command("tab", "close")
+            except Exception as exc:
+                logger.warning("Failed to close managed tab: %s", exc)
+            self._managed_tab_count -= 1
+        logger.info("All managed tabs closed")
+
     def _is_truncated(self, text: str) -> bool:
         stripped = text.rstrip()
         return stripped.endswith("\u2026") or stripped.endswith("...")
@@ -159,7 +190,7 @@ class TwitterCrawler:
             logger.info("Full-text max (%d) reached, skipping detail page for %s", self.full_text_max, tweet_url)
             return ""
         try:
-            self._run_browser_command("open", tweet_url)
+            self._open_managed_tab(tweet_url)
             time.sleep(2)
             js = """
 const art = document.querySelector('article[data-testid="tweet"]');
@@ -178,10 +209,12 @@ JSON.stringify(el ? el.innerText : '')
         except Exception as e:
             logger.warning("Failed to fetch full text for %s: %s", tweet_url, e)
             return ""
+        finally:
+            self._close_managed_tab()
 
     def _fetch_thread_tweets(self, tweet_url: str, feed_type: str) -> List[Dict[str, Any]]:
         try:
-            self._run_browser_command("open", tweet_url)
+            self._open_managed_tab(tweet_url)
             time.sleep(2)
             raw = self._run_browser_command("eval", THREAD_EVAL_JS)
             thread_items = self._parse_tweets_from_eval(raw, "thread")
@@ -194,6 +227,8 @@ JSON.stringify(el ? el.innerText : '')
         except Exception as e:
             logger.warning("Failed to fetch thread for %s: %s", tweet_url, e)
             return []
+        finally:
+            self._close_managed_tab()
 
     def get_for_you_feed(
         self, limit: int = 50, max_tweets: int = 500, db: Optional["TweetDatabase"] = None,
@@ -214,7 +249,7 @@ JSON.stringify(el ? el.innerText : '')
         db: Optional["TweetDatabase"] = None,
     ) -> List[Dict[str, Any]]:
         try:
-            self._run_browser_command("navigate", url)
+            self._open_managed_tab(url)
             time.sleep(2)
 
             # Login state detection
@@ -312,6 +347,8 @@ JSON.stringify(el ? el.innerText : '')
         except RuntimeError:
             logger.error("Failed to fetch %s feed", feed_type)
             return []
+        finally:
+            self._close_managed_tab()
 
     def _parse_tweets_from_eval(
         self, raw: str, feed_type: str,
